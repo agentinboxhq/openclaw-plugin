@@ -383,7 +383,11 @@ export async function sendText(
       "Only your operator has OpenClaw write to other people, from their own chat: not from a contact's conversation or a group.",
     );
   }
-  const sent = await api.createInteraction({ kind: "tell", card, thread: target });
+  const sent = await api.createInteraction({ kind: "tell", card, thread: target }).catch((error: unknown) => {
+    // Its answer never got there: a resolve waiting on it would leave the conversation resolved without one.
+    gateway?.replyFailed(target);
+    throw error;
+  });
   // It opened the conversation again, if OpenClaw had resolved it: its resolve waits until OpenClaw is quiet there.
   gateway?.sentInto(target);
   return { messageId: String(sent.id ?? "") };

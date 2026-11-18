@@ -599,6 +599,26 @@ describe("sends OpenClaw starts by itself", () => {
     }
   });
 
+  it("leave a conversation open, not resolved, when the reply OpenClaw resolved it after doesn't go out", async () => {
+    const fake = new FakeApi();
+    const { gateway, host } = makeGateway(fake);
+    bindGateway(gateway);
+    try {
+      await receive(gateway, message("m1", { conversation: "conv_ben", operator: false, name: "Ben", sender: "sub_ben" }));
+      const bens = host.turns[0]?.sessionKey;
+      gateway.resolveAfterReply("conv_ben");
+      fake.fail("POST /v1/inbox/messages", 400, { message: "The message is too long." });
+      await expect(
+        sendText({ cfg: { channels: { agentinbox: { secretKey: SETTINGS.secretKey, apiUrl: SETTINGS.apiUrl } } }, to: "agentinbox:conv_ben", text: "Booked for 7pm.", sessionKey: bens }),
+      ).rejects.toThrow();
+      expect(gateway.willResolve("conv_ben")).toBe(false);
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect(fake.resolved).toEqual([]);
+    } finally {
+      unbindGateway(gateway);
+    }
+  });
+
   it("go from a full-access contact's own chat into another conversation, as from the operator's", async () => {
     const fake = new FakeApi();
     const { gateway, host } = makeGateway(fake);

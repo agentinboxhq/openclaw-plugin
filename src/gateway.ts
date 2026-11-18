@@ -523,6 +523,13 @@ export class AgentInboxGateway {
     return this.resolving.has(conversationId);
   }
 
+  /** OpenClaw's reply there didn't go out: the conversation stays open, as the person never got its answer. */
+  replyFailed(conversationId: string): void {
+    if (!this.resolving.has(conversationId)) return;
+    this.keepOpen(conversationId);
+    this.log.warn(`[Agent Inbox] Left ${conversationId} open, as ${HOST_NAME}'s reply there didn't go out.`);
+  }
+
   private keepOpen(conversationId: string): void {
     const waiting = this.resolving.get(conversationId);
     if (waiting) clearTimeout(waiting);
