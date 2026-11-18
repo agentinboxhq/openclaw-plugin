@@ -1,0 +1,125 @@
+{
+  "id": "agentinbox",
+  "name": "Agent Inbox",
+  "description": "Messages to your agent on Telegram, Slack or email reach OpenClaw within seconds, and OpenClaw answers in the same conversation. Its tools ask the operator and bring the answer back to the chat, write to the operator's contacts, read the conversations, and resolve them.",
+  "version": "0.1.0",
+  "activation": {
+    "onStartup": true
+  },
+  "channels": [
+    "agentinbox"
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "channelConfigs": {
+    "agentinbox": {
+      "label": "Agent Inbox",
+      "description": "The agent `openclaw agentinbox setup` connected: messages from the operator, and from the contacts it listens to, start OpenClaw.",
+      "schema": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "Listen for messages. On by default once setup connected an agent."
+          },
+          "secretKey": {
+            "type": "string",
+            "description": "The agent's Agent Inbox key. `openclaw agentinbox setup` writes it."
+          },
+          "agent": {
+            "type": "string",
+            "description": "Which agent the key acts as, by its API name. Set by setup."
+          },
+          "apiUrl": {
+            "type": "string",
+            "description": "Agent Inbox's API, when it isn't https://www.agentinbox.md/api."
+          },
+          "contactsCanUse": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "What OpenClaw may use in a contact's conversation besides talking with them: tools and tool groups (group:web), MCP servers by name, and agentinbox for this plugin's tools. Nothing by default."
+          }
+        }
+      },
+      "uiHints": {
+        "secretKey": {
+          "label": "Agent key",
+          "sensitive": true
+        }
+      }
+    }
+  },
+  "contracts": {
+    "tools": [
+      "agentinbox_ask_operator",
+      "agentinbox_send",
+      "agentinbox_conversations",
+      "agentinbox_read",
+      "agentinbox_contacts",
+      "agentinbox_resolve"
+    ]
+  },
+  "toolMetadata": {
+    "agentinbox_ask_operator": {
+      "profiles": [
+        "coding",
+        "messaging",
+        "full"
+      ],
+      "sideEffecting": true
+    },
+    "agentinbox_send": {
+      "profiles": [
+        "coding",
+        "messaging",
+        "full"
+      ],
+      "sideEffecting": true
+    },
+    "agentinbox_conversations": {
+      "profiles": [
+        "coding",
+        "messaging",
+        "full"
+      ],
+      "replaySafe": true
+    },
+    "agentinbox_read": {
+      "profiles": [
+        "coding",
+        "messaging",
+        "full"
+      ],
+      "replaySafe": true
+    },
+    "agentinbox_contacts": {
+      "profiles": [
+        "coding",
+        "messaging",
+        "full"
+      ],
+      "replaySafe": true
+    },
+    "agentinbox_resolve": {
+      "profiles": [
+        "coding",
+        "messaging",
+        "full"
+      ],
+      "sideEffecting": true
+    }
+  },
+  "cliCommands": [
+    {
+      "name": "agentinbox",
+      "description": "Agent Inbox: `setup` connects this OpenClaw with a one-time code, `status` shows where it listens",
+      "hasSubcommands": true
+    }
+  ]
+}
