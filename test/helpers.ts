@@ -33,7 +33,7 @@ export class FakeHost implements GatewayHost {
   }
 }
 
-export function makeGateway(fake: FakeApi, options: { state?: State | null; host?: FakeHost } = {}) {
+export function makeGateway(fake: FakeApi, options: { state?: State | null; host?: FakeHost; askWaitMs?: number } = {}) {
   const host = options.host ?? new FakeHost();
   const store = new MemoryStateStore(options.state ?? null);
   const gateway = new AgentInboxGateway({
@@ -45,6 +45,7 @@ export function makeGateway(fake: FakeApi, options: { state?: State | null; host
     timing: { waitSeconds: 1, retryMs: [10], allowPollMs: 10, pausedRetryMs: 10 },
     answerPollMs: 10,
     waitingPollMs: 10,
+    askWaitMs: options.askWaitMs,
     resolveQuietMs: 60,
   });
   gateway.listener.operatorId = "op_ada";

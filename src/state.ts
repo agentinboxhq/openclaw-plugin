@@ -68,6 +68,8 @@ export type WaitingQuestion = {
   question: string;
   to: string;
   toOperator: boolean;
+  // A contact in their own session at full access, asked there: what they write stands in for the operator's.
+  trusted?: boolean;
   toName: string;
   kind: string;
   options: Record<string, string>;

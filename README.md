@@ -48,7 +48,7 @@ If nobody answers within an hour, or the operator says no, the gateway stops lis
 
 A contact's conversation is for talking with them, and so is a group, even when the operator writes there. The one exception is a contact with [full access](#full-access), in their own direct chat. Everywhere else, OpenClaw can:
 
-- answer them, and ask them something (`ask_user`);
+- answer them, and ask them something (`agentinbox_ask_here`, or OpenClaw's own `ask_user`);
 - read that conversation (`agentinbox_read`) and resolve it (`agentinbox_resolve`);
 - use what the operator lets contacts use, and nothing else.
 
@@ -106,16 +106,17 @@ OpenClaw's own approval settings decide what asks first. When something does, th
 
 **Allow for this session** shows only for the plugin's own send tool. For a command, OpenClaw's "allow always" would add it to OpenClaw's allowlist for good, which the operator does at OpenClaw itself.
 
-When OpenClaw asks a question with its `ask_user` tool, the question goes to the conversation, as buttons when there are a few options to pick from.
+OpenClaw asks the people in a conversation with `agentinbox_ask_here`. When it asks with its own `ask_user` tool instead, the question goes to the conversation too, as buttons when there are a few options to pick from. Two options, one to approve and one to deny (Approve, Allow, Accept or Confirm, and Deny, Reject, Decline or Cancel), come as an approval with those two buttons, and OpenClaw gets back the label that was tapped. Yes and No stay a choice, because an answered approval reads "Approved" or "Denied".
 
 ## Tools
 
-The plugin gives OpenClaw six tools. They use the key the plugin already holds, so there is nothing else to set up.
+The plugin gives OpenClaw seven tools. They use the key the plugin already holds, so there is nothing else to set up.
 
 | Tool | What it does |
 |---|---|
-| `agentinbox_ask_operator` | Asks the operator something, as a question, Approve and Deny, or a few choices, from a scheduled job, the Control UI, or another app's chat. It returns at once; the answer comes back, even hours later. Off in a contact's conversation, unless the operator lets contacts use `agentinbox`. |
-| `agentinbox_send` | Writes to the operator or to one of their contacts, in a new conversation. With a question, the answer comes back to the chat OpenClaw asked from. Off in a contact's conversation. |
+| `agentinbox_ask_here` | Asks the people in the conversation OpenClaw is in, there: a question they answer in words (`kind: ask`), Approve and Deny buttons (`kind: approve`, with `approve_label` and `deny_label` for other words on them), or one of a few `options` (`kind: choose`). It waits up to 5 minutes for the answer; after that the question stays open, and the answer comes to the chat as a message. |
+| `agentinbox_ask_operator` | Asks the operator something, with the same kinds, from a scheduled job, the Control UI, or another app's chat. It returns at once; the answer comes back, even hours later. Off in a contact's conversation, unless the operator lets contacts use `agentinbox`. |
+| `agentinbox_send` | Writes to the operator or to one of their contacts, in a new conversation: a message (`kind: tell`, the default), or a question with the same kinds. The answer comes back to the chat OpenClaw asked from. Off in a contact's conversation. |
 | `agentinbox_conversations` | Lists the conversations, latest first. Off in a contact's conversation. |
 | `agentinbox_read` | Reads one conversation. In a contact's conversation, only that one. |
 | `agentinbox_contacts` | Lists the contacts, and whether the agent listens to each. Off in a contact's conversation. |

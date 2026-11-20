@@ -18,12 +18,17 @@ import type { Chat, WaitingQuestion } from "./state.js";
 import * as words from "./words.js";
 
 export const ASK_OPERATOR = "agentinbox_ask_operator";
+export const ASK_HERE = "agentinbox_ask_here";
 export const SEND = "agentinbox_send";
 export const CONVERSATIONS = "agentinbox_conversations";
 export const READ = "agentinbox_read";
 export const CONTACTS = "agentinbox_contacts";
 export const RESOLVE = "agentinbox_resolve";
-export const TOOL_NAMES = [ASK_OPERATOR, SEND, CONVERSATIONS, READ, CONTACTS, RESOLVE] as const;
+export const TOOL_NAMES = [ASK_OPERATOR, ASK_HERE, SEND, CONVERSATIONS, READ, CONTACTS, RESOLVE] as const;
+
+// What a card asks for, in the words of the CLI and the MCP server: `tell` nothing, `ask` words, `approve` Approve
+// or Deny, `choose` one of a few options.
+const KINDS = ["tell", "ask", "approve", "choose"] as const;
 
 // How long the operator has to allow a write (Hermes's approval timeout; OpenClaw allows up to 10 minutes).
 export const WRITE_APPROVAL_TIMEOUT_MS = 5 * 60_000;
@@ -218,7 +223,7 @@ function required(value: unknown, name: string): string {
 }
 
 /** A plain list, or the shapes small models send for one: a comma-separated string, or objects with a label. */
-export function readChoices(value: unknown): string[] {
+export function readOptions(value: unknown): string[] {
   let items: unknown[] = [];
   if (typeof value === "string") items = value.split(/\r?\n/).flatMap((line) => line.split(","));
   else if (Array.isArray(value)) items = value;
@@ -237,30 +242,47 @@ function limitOf(value: unknown, fallback: number, most: number): number {
 }
 
 /** What the person may answer with: `tell` none, `ask` words, `approve` Approve or Deny, `choose` one option. */
-type Answer = { kind: "tell" | "ask" | "approve" | "choose"; options: Record<string, string> };
+type Answer = {
+  kind: (typeof KINDS)[number];
+  options: Record<string, string>;
+  approveLabel?: string;
+  denyLabel?: string;
+};
 
-function answerOf(args: Json, fallback: string): Answer {
-  const choices = readChoices(args.choices);
-  let wanted = String(args.answer ?? "").trim().toLowerCase() || (choices.length ? "choose" : fallback);
-  if (choices.length && (wanted === "none" || wanted === "text")) wanted = "choose";
-  const kinds: Record<string, Answer["kind"]> = { none: "tell", text: "ask", approve: "approve", choose: "choose" };
-  const kind = kinds[wanted];
-  if (!kind) throw new ToolError("`answer` is one of: none, text, approve, choose.");
-  if (kind === "choose") {
-    if (choices.length < 2 || choices.length > 10) throw new ToolError("`answer: choose` takes 2 to 10 `choices`.");
+/**
+ * `kind`, `options`, `approve_label` and `deny_label`, as the CLI and the MCP server take them. Options without a kind,
+ * or with `ask` or `tell`, make it `choose`; labels without a kind make it `approve`.
+ */
+function answerOf(args: Json, fallback: Answer["kind"]): Answer {
+  const picks = readOptions(args.options);
+  const [approveLabel, denyLabel] = [args.approve_label, args.deny_label].map((label) =>
+    words.clean(label).trim().slice(0, OPTION_MAX),
+  );
+  let kind = String(args.kind ?? "").trim().toLowerCase();
+  if (!kind) kind = picks.length ? "choose" : approveLabel || denyLabel ? "approve" : fallback;
+  else if (picks.length && (kind === "tell" || kind === "ask")) kind = "choose";
+  const known = KINDS.find((each) => each === kind);
+  if (!known) throw new ToolError(`\`kind\` is one of: ${KINDS.join(", ")}.`);
+  if ((approveLabel || denyLabel) && known !== "approve") {
+    throw new ToolError("`approve_label` and `deny_label` go with `kind: approve`.");
+  }
+  if (known === "choose") {
+    if (picks.length < 2 || picks.length > 10) throw new ToolError("`kind: choose` takes 2 to 10 `options`.");
     const options: Record<string, string> = {};
-    choices.forEach((label, index) => {
+    picks.forEach((label, index) => {
       options[`opt_${index + 1}`] = label;
     });
-    return { kind, options };
+    return { kind: known, options };
   }
-  return { kind, options: {} };
+  return { kind: known, options: {}, approveLabel, denyLabel };
 }
 
 function cardOf(text: string, answer: Answer, body?: string | null): Json {
   const card: Json = { title: words.clipCard(text) };
   if (body) card.body = words.clipCard(body);
-  if (answer.kind === "approve") Object.assign(card, { approveLabel: "Approve", denyLabel: "Deny" });
+  if (answer.kind === "approve") {
+    Object.assign(card, { approveLabel: answer.approveLabel || "Approve", denyLabel: answer.denyLabel || "Deny" });
+  }
   if (answer.kind === "choose") card.options = Object.entries(answer.options).map(([id, label]) => ({ id, label }));
   return card;
 }
@@ -433,11 +455,11 @@ function keptStarter(message: words.ListenMessage | Json): NonNullable<Chat["sta
   };
 }
 
-export type ToolCall = { settings: Settings; place: Place; args: Json; fetch?: FetchLike };
+export type ToolCall = { settings: Settings; place: Place; args: Json; fetch?: FetchLike; signal?: AbortSignal };
 
 export async function askOperator({ settings, place, args, fetch: fetchImpl }: ToolCall): Promise<string> {
   const question = required(args.question, "question");
-  const answer = answerOf(args, "text");
+  const answer = answerOf(args, "ask");
   if (answer.kind === "tell") {
     throw new ToolError(`A question needs an answer; to tell your operator something, use ${SEND}.`);
   }
@@ -445,7 +467,7 @@ export async function askOperator({ settings, place, args, fetch: fetchImpl }: T
   if (hasContactLimits(gateway, place)) throw new ToolError(words.CONTACT_NO_ASKING);
   // A full-access contact's chat asks the operator as any other place does; only the operator's own answers here.
   if (inAgentInbox(place) && !hasFullAccess(gateway, place)) {
-    throw new ToolError("You're talking with your operator in this chat: ask them in your answer instead.");
+    throw new ToolError(`You're talking with your operator in this chat: ask them here with ${ASK_HERE} instead.`);
   }
   return run(
     settings,
@@ -468,6 +490,65 @@ export async function askOperator({ settings, place, args, fetch: fetchImpl }: T
     },
     fetchImpl,
   );
+}
+
+/**
+ * Who answers a question in this conversation, as its answer names them. Only what the operator writes, or a contact in
+ * their own session at full access, is more than a request and data.
+ */
+function askedHere(
+  gateway: AgentInboxGateway,
+  place: Place,
+  chat: Chat,
+): Pick<WaitingQuestion, "to" | "toOperator" | "toName" | "trusted"> {
+  if (!isContactChat(gateway, place)) return { to: gateway.operatorId ?? "", toOperator: true, toName: "Your operator" };
+  if (!chat.isDirect) return { to: "", toOperator: false, toName: "Someone in this conversation" };
+  return {
+    to: chat.userId ?? "",
+    toOperator: false,
+    toName: chat.userName || "The contact",
+    trusted: hasFullAccess(gateway, place),
+  };
+}
+
+/**
+ * Asks the people in this Agent Inbox conversation, in it, and waits for their answer, as `reply <id> ask`, `approve`
+ * or `choose` does in the CLI. Past the wait, the question stays open, and its answer comes to the chat as a message.
+ */
+export async function askHere({ settings, place, args, signal }: ToolCall): Promise<string> {
+  const question = required(args.question, "question");
+  const answer = answerOf(args, "ask");
+  if (answer.kind === "tell") throw new ToolError("A question needs an answer; anything else, say in your answer here.");
+  const gateway = boundGateway(settings);
+  const chat = place.chat;
+  if (!gateway || !inAgentInbox(place) || !chat) {
+    throw new ToolError(
+      `${ASK_HERE} asks in the Agent Inbox conversation you're in, and this isn't one. To ask your operator, use ` +
+        `${ASK_OPERATOR}.`,
+    );
+  }
+  const since = gateway.latestIdIn(chat.conversationId);
+  const sent = await gateway.api.createInteraction({
+    kind: answer.kind,
+    card: cardOf(question, answer),
+    thread: chat.conversationId,
+    ttlSeconds: words.TOOL_QUESTION_TTL_SECONDS,
+  });
+  const id = String(sent.id ?? "");
+  const starter = gateway.starterOf(chat.conversationId);
+  // Its answer comes to the chat, also after a restart, unless this call still waits for it.
+  gateway.expectAnswer({
+    id,
+    question,
+    ...askedHere(gateway, place, chat),
+    kind: answer.kind,
+    options: answer.options,
+    conversation: chat.conversationId,
+    expiresAt: typeof sent.expiresAt === "string" ? sent.expiresAt : null,
+    chat: { ...chat, starter: starter ? keptStarter(starter) : chat.starter },
+  });
+  const outcome = await gateway.waitHere(id, chat.conversationId, since, signal);
+  return outcome ? words.hereAnswer(outcome.question, outcome.status, outcome) : words.NO_ANSWER_YET;
 }
 
 /**
@@ -536,12 +617,12 @@ export async function send({ settings, place, args, fetch: fetchImpl }: ToolCall
   if (hasContactLimits(gateway, place)) throw new ToolError(words.CONTACT_NO_WRITING);
   const toWords = required(args.to, "to");
   const text = required(args.text, "text");
-  const answer = answerOf(args, "none");
+  const answer = answerOf(args, "tell");
   const to = await run(settings, (api, gateway) => recipientOf(api, gateway, toWords), fetchImpl);
   if (talkingWith(place, to)) {
     throw new ToolError(
-      `You're talking with ${to.name} in this chat: your answer already goes to them. Use ${SEND} only to write to ` +
-        "someone else.",
+      `You're talking with ${to.name} in this chat: your answer already goes to them, and ${ASK_HERE} asks them ` +
+        `something. Use ${SEND} only to write to someone else.`,
     );
   }
   if (
@@ -737,21 +818,48 @@ export async function contacts({ settings, place, args, fetch: fetchImpl }: Tool
 
 // --- what OpenClaw sees ---
 
-const CHOICES = {
-  anyOf: [{ type: "array", items: { type: "string" } }, { type: "string" }],
-  description: "With `answer: choose`: 2 to 10 short options, as buttons to pick one from.",
-};
+/** `kind`, `options` and the Approve and Deny labels, as the CLI and the MCP server name them. */
+function asking(kinds: Answer["kind"][], first: Answer["kind"]): Json {
+  const said: Record<Answer["kind"], string> = {
+    tell: "tell: just a message",
+    ask: "ask: they answer in words",
+    approve: "approve: Approve and Deny buttons",
+    choose: "choose: one of `options`",
+  };
+  return {
+    kind: {
+      type: "string",
+      enum: kinds,
+      description: `${kinds.map((kind) => said[kind] + (kind === first ? " (default)" : "")).join(". ")}.`,
+    },
+    options: {
+      anyOf: [{ type: "array", items: { type: "string" } }, { type: "string" }],
+      description: "With `kind: choose`: 2 to 10 short options, as buttons to pick one from.",
+    },
+    approve_label: {
+      type: "string",
+      description: "With `kind: approve`: the Approve button's words, e.g. “Ship it”. Default Approve.",
+    },
+    deny_label: { type: "string", description: "With `kind: approve`: the Deny button's words, e.g. “Hold”. Default Deny." },
+  };
+}
 
 const ASK_DESCRIPTION =
   "Ask your operator, the person you work for, and get their answer back: from a scheduled job, the Control UI, or " +
   "another app's chat, before you do something only your operator can decide. It returns at once; when your " +
-  "operator answers, even hours later, the answer comes back to you. In your operator's own Agent Inbox chat, just " +
-  "ask in your answer instead. Off in a contact's Agent Inbox conversation, unless they have full access.";
+  "operator answers, even hours later, the answer comes back to you. In your operator's own Agent Inbox chat, ask " +
+  `them there with ${ASK_HERE} instead. Off in a contact's Agent Inbox conversation, unless they have full access.`;
+
+const ASK_HERE_DESCRIPTION =
+  "Ask the people in the Agent Inbox conversation you're in something, there, and wait for the answer: words (kind " +
+  "ask), Approve or Deny (kind approve), or one of a few options (kind choose). It waits up to 5 minutes; without an " +
+  "answer by then, the question stays open, and the answer comes to you in this chat when they give it. Only in an " +
+  `Agent Inbox conversation; to ask your operator from anywhere else, use ${ASK_OPERATOR}.`;
 
 const SEND_DESCRIPTION =
   "Write to your operator or to one of their contacts, in a new conversation on their usual channel. Your answer " +
-  "in this chat already goes to the person here, so use this only for someone else. With `answer`, it asks a " +
-  "question, and the answer comes back to you in this chat. Off in a contact's Agent Inbox conversation, unless " +
+  `in this chat already goes to the person here, and ${ASK_HERE} asks them something, so use this only for someone ` +
+  "else. With `kind`, it asks a question, and the answer comes back to you in this chat. Off in a contact's Agent Inbox conversation, unless " +
   "they have full access: only your operator, and a contact they gave full access, have you write to other people.";
 
 const RESOLVE_DESCRIPTION =
@@ -786,16 +894,24 @@ export const TOOLS: ToolSpec[] = [
           description:
             "What to ask, as your operator should read it: say who wants what, e.g. “Ben asks for a 10% discount on his order. OK?”",
         },
-        answer: {
-          type: "string",
-          enum: ["text", "approve", "choose"],
-          description: "text: they write an answer (default). approve: Approve and Deny buttons. choose: one of `choices`.",
-        },
-        choices: CHOICES,
+        ...asking(["ask", "approve", "choose"], "ask"),
       },
       ["question"],
     ),
     run: askOperator,
+  },
+  {
+    name: ASK_HERE,
+    label: "Ask in this conversation",
+    description: ASK_HERE_DESCRIPTION,
+    parameters: schema(
+      {
+        question: { type: "string", description: "What to ask, as the people here should read it, e.g. “Deploy to staging?”" },
+        ...asking(["ask", "approve", "choose"], "ask"),
+      },
+      ["question"],
+    ),
+    run: askHere,
   },
   {
     name: SEND,
@@ -805,13 +921,7 @@ export const TOOLS: ToolSpec[] = [
       {
         to: { type: "string", description: `“operator”, or a contact's id, email or name, as ${CONTACTS} lists them.` },
         text: { type: "string", description: "The message, as they should read it." },
-        answer: {
-          type: "string",
-          enum: ["none", "text", "approve", "choose"],
-          description:
-            "none: just a message (default). text: a question they answer in words. approve: Approve and Deny buttons. choose: one of `choices`.",
-        },
-        choices: CHOICES,
+        ...asking(["tell", "ask", "approve", "choose"], "tell"),
       },
       ["to", "text"],
     ),

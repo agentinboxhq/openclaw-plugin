@@ -27,6 +27,9 @@ export const ALLOW_FOR_SESSION = "session";
 // How long a question to a person waits for the answer.
 export const QUESTION_TTL_SECONDS = 10 * 60;
 
+// How long agentinbox_ask_here waits for the answer within its call. A later answer comes into the chat as a message.
+export const ASK_HERE_WAIT_MS = 5 * 60_000;
+
 // How often an open card's answer is looked up, when it didn't come with the messages.
 export const ANSWER_POLL_MS = 5_000;
 
@@ -104,6 +107,9 @@ type PendingQuestion = {
 };
 
 type Pending = PendingApproval | PendingQuestion;
+
+/** An answer agentinbox_ask_here got while it waited: what it asked, and what came back. */
+export type HereOutcome = { question: WaitingQuestion; status: string; picked: string | null; text: string | null };
 
 /** Whom OpenClaw's send tool writes to, and what, for the card its approval asks the operator with. */
 export type Write = { name: string; text: string; recipientId: string; sessionKey: string };
@@ -188,6 +194,7 @@ export class AgentInboxGateway {
   private readonly log: Logger;
   private readonly answerPollMs: number;
   private readonly waitingPollMs: number;
+  private readonly askWaitMs: number;
   private waitingPolledAt = 0;
   private readonly pending = new Map<string, Pending>();
   // Each conversation's latest message, which the cards of its run name: "For Ben's message on Telegram".
@@ -200,6 +207,9 @@ export class AgentInboxGateway {
   private readonly grants = new Set<string>();
   // The card each approval was asked with, to withdraw it when OpenClaw settles the approval another way.
   private readonly approvalCards = new Map<string, string>();
+  // The agentinbox_ask_here calls still waiting for their question's answer, by question: its conversation, and how
+  // to end the wait.
+  private readonly asking = new Map<string, { conversationId: string; settle: (outcome: HereOutcome | null) => void }>();
   // The conversations OpenClaw resolved, each with its wait for OpenClaw to be quiet there.
   private readonly resolving = new Map<string, ReturnType<typeof setTimeout> | null>();
   private readonly resolveQuietMs: number;
@@ -216,6 +226,7 @@ export class AgentInboxGateway {
     timing?: Partial<Timing>;
     answerPollMs?: number;
     waitingPollMs?: number;
+    askWaitMs?: number;
     resolveQuietMs?: number;
     clock?: () => number;
     sleep?: (ms: number) => Promise<void>;
@@ -229,6 +240,7 @@ export class AgentInboxGateway {
     this.log = options.log ?? silentLogger;
     this.answerPollMs = options.answerPollMs ?? ANSWER_POLL_MS;
     this.waitingPollMs = options.waitingPollMs ?? WAITING_POLL_MS;
+    this.askWaitMs = options.askWaitMs ?? ASK_HERE_WAIT_MS;
     this.resolveQuietMs = options.resolveQuietMs ?? RESOLVE_QUIET_MS;
     this.listener = new Listener({
       api: options.api,
@@ -276,6 +288,7 @@ export class AgentInboxGateway {
       if (pending.kind === "approval") this.approvalCards.delete(pending.approvalId);
       await this.withdraw(interactionId);
     }
+    for (const waiting of [...this.asking.values()]) waiting.settle(null);
     await this.listener.close();
   }
 
@@ -294,6 +307,9 @@ export class AgentInboxGateway {
       this.latest.set(conversation, message);
       // Someone wrote before OpenClaw's resolve went through: the conversation goes on.
       this.keepOpen(conversation);
+      // A question OpenClaw waits on here stops waiting: what they wrote reaches OpenClaw as it is, and an answer still
+      // to come does too, as a message.
+      this.stopWaitingIn(conversation);
     }
     const written = chatOf(message, starterKept(this.latest.get(conversation) ?? message));
     // A contact's message sets their conversation's level; a command only goes to the session the run is in.
@@ -301,7 +317,10 @@ export class AgentInboxGateway {
     const chat = this.atLevel(written);
     // `/stop` in a conversation: its open questions come off people's phones. OpenClaw cancels the run's approvals
     // itself, and their cards come off with them.
-    if (command && first === "/stop") await this.withdrawQuestions(this.host.sessionKeyFor(chat));
+    if (command && first === "/stop") {
+      await this.withdrawQuestions(this.host.sessionKeyFor(chat));
+      for (const questionId of this.stopWaitingIn(conversation)) await this.withdraw(questionId);
+    }
     const at = Date.parse(String(message.at ?? ""));
     this.dispatch({
       chat,
@@ -427,8 +446,10 @@ export class AgentInboxGateway {
       }
       return;
     }
-    if (status !== "answered" && status !== "approved") return;
-    const response = (optionId ? pending.options[optionId] : undefined) ?? text;
+    if (status !== "answered" && status !== "approved" && status !== "denied") return;
+    // A question's Approve and Deny buttons answer with their labels, as its options do.
+    const button = status === "approved" ? "approve" : status === "denied" ? "deny" : "";
+    const response = (optionId ? pending.options[optionId] : undefined) ?? pending.options[button] ?? text;
     if (!response) return;
     // OpenClaw takes a plain reply from the person asked as the answer to its open question.
     const sender = from ?? {};
@@ -456,14 +477,20 @@ export class AgentInboxGateway {
   async deliver(chat: Chat, sessionKey: string, reply: Reply): Promise<string | null> {
     if (reply.question) {
       const card = words.questionCard(reply.question.text, reply.question.options, reply.question.multiple);
-      const options: Record<string, string> = {};
-      (card.options ?? []).forEach((label, index) => {
-        options[`opt_${index + 1}`] = label;
-      });
-      const content: Json =
-        card.kind === "choose"
-          ? { title: card.title, options: Object.entries(options).map(([id, label]) => ({ id, label })) }
-          : { title: card.title, ...(card.body ? { body: card.body } : {}) };
+      let options: Record<string, string> = {};
+      let content: Json;
+      if (card.kind === "approve") {
+        // Each button answers with its own label, as a pick among the options would.
+        options = { approve: card.approveLabel, deny: card.denyLabel };
+        content = { title: card.title, approveLabel: card.approveLabel, denyLabel: card.denyLabel };
+      } else if (card.kind === "choose") {
+        card.options.forEach((label, index) => {
+          options[`opt_${index + 1}`] = label;
+        });
+        content = { title: card.title, options: Object.entries(options).map(([id, label]) => ({ id, label })) };
+      } else {
+        content = { title: card.title, ...(card.body ? { body: card.body } : {}) };
+      }
       const asked = await this.api.createInteraction({
         kind: card.kind,
         card: content,
@@ -690,6 +717,41 @@ export class AgentInboxGateway {
     this.startPolling();
   }
 
+  /** The id of the latest message in this conversation; "" before any came here. */
+  latestIdIn(conversationId: string): string {
+    const latest = this.latest.get(conversationId) as { id?: unknown } | undefined;
+    return String(latest?.id ?? "");
+  }
+
+  /**
+   * agentinbox_ask_here waits for its question's answer, for 5 minutes at most, or until OpenClaw stops the call: while
+   * it waits, the answer is the call's result instead of a message in the chat. Null when none came. Not when someone
+   * wrote there after `since`, while it asked: that message ends the wait as any later one would.
+   */
+  waitHere(questionId: string, conversationId: string, since: string, signal?: AbortSignal): Promise<HereOutcome | null> {
+    if (this.latestIdIn(conversationId) !== since) return Promise.resolve(null);
+    return new Promise((resolve) => {
+      const settle = (outcome: HereOutcome | null) => {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", stop);
+        this.asking.delete(questionId);
+        resolve(outcome);
+      };
+      const stop = () => settle(null);
+      const timer = setTimeout(stop, this.askWaitMs);
+      this.asking.set(questionId, { conversationId, settle });
+      if (signal?.aborted) stop();
+      else signal?.addEventListener("abort", stop, { once: true });
+    });
+  }
+
+  /** The calls waiting in a conversation stop waiting; the questions they asked, by id. */
+  private stopWaitingIn(conversationId: string): string[] {
+    const stopped = [...this.asking].filter(([, waiting]) => waiting.conversationId === conversationId);
+    for (const [, waiting] of stopped) waiting.settle(null);
+    return stopped.map(([questionId]) => questionId);
+  }
+
   private async answered(questionId: string, status: string, optionId: string | null, text: string | null): Promise<void> {
     const question = this.listener.state.waiting[questionId];
     if (!question) return;
@@ -698,14 +760,19 @@ export class AgentInboxGateway {
     remember(this.listener.state, "own", questionId);
     this.listener.save();
     const picked = optionId ? question.options?.[optionId] ?? null : null;
-    const note = status === "canceled" ? null : words.answerNote(question, status, { picked, text });
     // The chat that asked, in its own session; asked from elsewhere, the asked person's conversation at its level now.
     const elsewhere = question.chat ? null : conversationChat(question);
     const chat = question.chat ?? (elsewhere ? this.atLevel(elsewhere) : null);
-    if (!note || !chat) return;
     // A full-access session doesn't go on once the contact's full access is off, and nothing from it goes into
     // another session: what someone answered it is left out.
-    if (chat.fullAccess && !this.levelOf(chat.conversationId).fullAccess) {
+    const accessEnded = Boolean(chat?.fullAccess && !this.levelOf(chat.conversationId).fullAccess);
+    const waiting = this.asking.get(questionId);
+    // The call that asked still waits for it: the answer is its result.
+    waiting?.settle(accessEnded ? null : { question, status, picked, text });
+    if (waiting && !accessEnded) return;
+    const note = status === "canceled" ? null : words.answerNote(question, status, { picked, text });
+    if (!note || !chat) return;
+    if (accessEnded) {
       this.log.info(`[Agent Inbox] Left ${questionId}'s answer out of ${chat.conversationId}: its full access is off since.`);
       return;
     }
@@ -792,7 +859,7 @@ export class AgentInboxGateway {
         // OpenClaw's own timeout denies it when none comes.
         if (status === "approved" && pending.kind === "approval" && pending.approver) continue;
         // So does an answer for a full-access session, until its card is past its time; then it is left out.
-        if (pending.kind === "question" && pending.chat.fullAccess && (status === "answered" || status === "approved")) {
+        if (pending.kind === "question" && pending.chat.fullAccess && ["answered", "approved", "denied"].includes(status)) {
           if (expired(asked)) this.pending.delete(interactionId);
           continue;
         }

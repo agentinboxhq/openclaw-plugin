@@ -9,7 +9,7 @@
 // It is a fence, not a wall: a command can still reach a key in ways no check here reads, such as a script OpenClaw
 // wrote first. A contact who may run commands may run any.
 import { type Json, isRecord } from "./api.js";
-import { ASK_OPERATOR, CONTACTS, CONVERSATIONS, type Place, READ, RESOLVE, SEND } from "./tools.js";
+import { ASK_HERE, ASK_OPERATOR, CONTACTS, CONVERSATIONS, type Place, READ, RESOLVE, SEND } from "./tools.js";
 import * as words from "./words.js";
 
 /** The name that gives contacts this plugin's own tools, in `contactsCanUse`. */
@@ -107,7 +107,7 @@ const PATH_KEYS = [
 const TOOL_KEYS = ["name", "tool", "toolName", "tool_name"];
 
 // The plugin's own tools.
-const OWN_TOOLS: ReadonlySet<string> = new Set([SEND, ASK_OPERATOR, CONVERSATIONS, CONTACTS, READ, RESOLVE]);
+const OWN_TOOLS: ReadonlySet<string> = new Set([SEND, ASK_OPERATOR, ASK_HERE, CONVERSATIONS, CONTACTS, READ, RESOLVE]);
 
 /** Every string in a tool's arguments, however deep, up to a limit. */
 function stringsIn(value: unknown, found: string[] = [], depth = 0): string[] {
@@ -154,13 +154,15 @@ function mayUse(tool: string, allowed: ReadonlySet<string>): boolean {
 }
 
 /**
- * The plugin's own tools: `undefined` for another tool, `null` when the call may go on, or why it can't. Reading and
- * resolving go on for this very conversation.
+ * The plugin's own tools: `undefined` for another tool, `null` when the call may go on, or why it can't. Asking,
+ * reading and resolving go on for this very conversation.
  */
 function ownToolBlock(tool: string, args: Json, place: Place): string | null | undefined {
   if (!OWN_TOOLS.has(tool)) return undefined;
   const here = place.chat?.conversationId ?? null;
   const named = words.clean(args.conversation).trim();
+  // It asks only the people in this very conversation.
+  if (tool === ASK_HERE) return null;
   if (tool === SEND) return words.CONTACT_NO_WRITING;
   if (tool === ASK_OPERATOR) return words.CONTACT_NO_ASKING;
   if (tool === CONVERSATIONS || tool === CONTACTS) return words.CONTACT_NO_OTHERS;

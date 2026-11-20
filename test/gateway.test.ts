@@ -223,6 +223,35 @@ describe("gateway: replies", () => {
     expect(host.turns[0]?.rawText).toBe("Lobster");
   });
 
+  it("puts a question of Approve or Deny as an approval, and the tapped label back as the reply", async () => {
+    const fake = new FakeApi();
+    const { gateway, host } = makeGateway(fake);
+    const ask = (options: string[]) =>
+      gateway.deliver(CHAT, "sess_1", { text: "", question: { text: "Deploy to staging?", options, multiple: false } });
+    await ask(["Deny", "Approve"]);
+    const first = fake.last("approve");
+    expect(first.thread).toBe("conv_1");
+    expect(card(first)).toEqual({ title: "Deploy to staging?", approveLabel: "Approve", denyLabel: "Deny" });
+    await ask(["✅ Allow", "❌ Reject"]);
+    const second = fake.last("approve");
+    expect([card(second).approveLabel, card(second).denyLabel]).toEqual(["✅ Allow", "❌ Reject"]);
+    fake.answer(String(first.id), "denied");
+    fake.answer(String(second.id), "approved", { optionId: "approve" });
+    await until(() => host.turns.length === 2);
+    expect(host.turns.map((turn) => turn.rawText).sort()).toEqual(["Deny", "✅ Allow"]);
+  });
+
+  it("keeps any other two options a choice", async () => {
+    const fake = new FakeApi();
+    const { gateway } = makeGateway(fake);
+    for (const options of [["Yes", "No"], ["Approve", "Allow"], ["Approve it", "Deny"]]) {
+      await gateway.deliver(CHAT, "sess_1", { text: "", question: { text: "Deploy?", options, multiple: false } });
+      expect(fake.sent.at(-1)?.kind).toBe("choose");
+    }
+    await gateway.deliver(CHAT, "sess_1", { text: "", question: { text: "Deploy?", options: ["Approve", "Deny"], multiple: true } });
+    expect(fake.sent.at(-1)?.kind).toBe("ask");
+  });
+
   it("withdraws a conversation's open questions on /stop", async () => {
     const fake = new FakeApi();
     const { gateway } = makeGateway(fake);

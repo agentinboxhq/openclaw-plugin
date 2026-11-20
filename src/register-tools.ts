@@ -106,7 +106,7 @@ export function registerTools(api: OpenClawPluginApi): void {
           label: spec.label,
           description: spec.description,
           parameters: spec.parameters,
-          async execute(toolCallId: string, params: unknown) {
+          async execute(toolCallId: string, params: unknown, signal?: AbortSignal) {
             const place = placeOf({
               surface: context.messageChannel,
               sessionKey: context.sessionKey,
@@ -114,7 +114,8 @@ export function registerTools(api: OpenClawPluginApi): void {
               toolCallId,
               gateway: boundGateway(settings),
             });
-            const { text, ok } = await runTool(spec, { settings, place, args: isRecord(params) ? params : {} });
+            const args = isRecord(params) ? params : {};
+            const { text, ok } = await runTool(spec, { settings, place, args, signal });
             return { content: [{ type: "text", text }], details: ok ? { ok: true } : { ok: false, error: text } };
           },
         };

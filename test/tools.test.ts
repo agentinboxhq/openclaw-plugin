@@ -4,6 +4,7 @@ import { cardFor } from "../src/approvals.js";
 import type { AgentInboxGateway } from "../src/gateway.js";
 import { CHANNEL_ID } from "../src/settings.js";
 import {
+  ASK_HERE,
   SEND,
   TOOLS,
   beforeSend,
@@ -85,10 +86,10 @@ afterEach(async () => {
   gateways = [];
 });
 
-function setup(options: { bound?: boolean } = {}) {
+function setup(options: { bound?: boolean; askWaitMs?: number } = {}) {
   const fake = new FakeApi();
   fake.contacts = [ADA, BEN, ANNA];
-  const { gateway, host, store } = makeGateway(fake);
+  const { gateway, host, store } = makeGateway(fake, { askWaitMs: options.askWaitMs });
   if (options.bound !== false) {
     bindGateway(gateway);
     gateways.push(gateway);
@@ -141,8 +142,9 @@ function lastTurn(host: FakeHost) {
 }
 
 describe("tools", () => {
-  it("are six, with the send tool's required arguments", () => {
+  it("are seven, with the send tool's required arguments", () => {
     expect(TOOLS.map((each) => each.name).sort()).toEqual([
+      "agentinbox_ask_here",
       "agentinbox_ask_operator",
       "agentinbox_contacts",
       "agentinbox_conversations",
@@ -160,7 +162,7 @@ describe("tools", () => {
 
     expect(await call(fake, SEND, { to: "Anna", text: "Hi" }, BENS_CHAT, gate)).toBe(words.CONTACT_NO_WRITING);
     expect(await call(fake, SEND, { to: "operator", text: "Ben says hi" }, BENS_CHAT, gate)).toBe(words.CONTACT_NO_WRITING);
-    expect(await call(fake, "agentinbox_ask_operator", { question: "Ben wants 10% off. OK?", answer: "approve" }, BENS_CHAT)).toBe(
+    expect(await call(fake, "agentinbox_ask_operator", { question: "Ben wants 10% off. OK?", kind: "approve" }, BENS_CHAT)).toBe(
       words.CONTACT_NO_ASKING,
     );
     expect(await call(fake, "agentinbox_conversations", {}, BENS_CHAT)).toBe(words.CONTACT_NO_OTHERS);
@@ -196,7 +198,7 @@ describe("tools", () => {
     const gate = new Gate();
     await receive(gateway, message("m1", { text: "Ask Ben if he can come on Friday.", ...FROM_ADA }));
 
-    const result = await call(fake, SEND, { to: "Ben", text: "Can you come on Friday?", answer: "choose", choices: ["Yes", "No"] }, ADAS_CHAT, gate);
+    const result = await call(fake, SEND, { to: "Ben", text: "Can you come on Friday?", kind: "choose", options: ["Yes", "No"] }, ADAS_CHAT, gate);
     expect(result.startsWith("Asked Ben Stone.")).toBe(true);
     // Ada asked for it herself: nothing to allow first.
     expect(gate.asked).toEqual([]);
@@ -219,7 +221,7 @@ describe("tools", () => {
   it("bring a written answer back in full", async () => {
     const { fake, gateway, host } = setup();
     await receive(gateway, message("m1", { text: "Ask Ben when he's free.", ...FROM_ADA }));
-    await call(fake, SEND, { to: "ben@example.com", text: "When are you free?", answer: "text" }, ADAS_CHAT);
+    await call(fake, SEND, { to: "ben@example.com", text: "When are you free?", kind: "ask" }, ADAS_CHAT);
     fake.answer(String(fake.last("ask").id), "answered", { text: "Friday after 5" });
     await until(() => host.turns.length === 2);
     expect(lastTurn(host).rawText).toBe(
@@ -305,11 +307,11 @@ describe("tools", () => {
     expect(fake.sent).toEqual([]);
   });
 
-  it("ask in the answer, in the operator's own chat", async () => {
+  it("ask the operator in her own chat with the tool for this conversation", async () => {
     const { fake, gateway } = setup();
     await receive(gateway, message("m1", { text: "Plan my week", ...FROM_ADA }));
     const result = await call(fake, "agentinbox_ask_operator", { question: "Which days?" }, ADAS_CHAT);
-    expect(result).toContain("ask them in your answer instead");
+    expect(result).toContain("ask them here with agentinbox_ask_here instead");
     expect(fake.sent).toEqual([]);
   });
 
@@ -328,7 +330,7 @@ describe("tools", () => {
   it("tell OpenClaw when nobody answered in time", async () => {
     const { fake, gateway, host } = setup();
     await receive(gateway, message("m1", { text: "Ask Ben if Friday works.", ...FROM_ADA }));
-    await call(fake, SEND, { to: "Ben", text: "Does Friday work?", answer: "approve" }, ADAS_CHAT);
+    await call(fake, SEND, { to: "Ben", text: "Does Friday work?", kind: "approve" }, ADAS_CHAT);
     const interaction = fake.interactions[String(fake.last("approve").id)];
     if (interaction) interaction.status = "expired";
     await until(() => host.turns.length === 2);
@@ -341,7 +343,7 @@ describe("tools", () => {
   it("keep a waiting question for a restart, and take its answer once", async () => {
     const { fake, gateway, host, store } = setup();
     await receive(gateway, message("m1", { text: "Ask Ben how much he wants.", ...FROM_ADA }));
-    await call(fake, SEND, { to: "Ben", text: "How much off do you want?", answer: "text" }, ADAS_CHAT);
+    await call(fake, SEND, { to: "Ben", text: "How much off do you want?", kind: "ask" }, ADAS_CHAT);
     const question = String(fake.last("ask").id);
     const kept = store.current?.waiting[question];
     expect(kept?.chat?.conversationId).toBe("conv_ada");
@@ -438,7 +440,7 @@ describe("tools", () => {
 
   it("bring the answer to a question from the Control UI into the operator's conversation", async () => {
     const { fake, host } = setup();
-    await call(fake, "agentinbox_ask_operator", { question: "Restart the server?", answer: "approve" }, { surface: "webchat", sessionKey: "agent:main:main" });
+    await call(fake, "agentinbox_ask_operator", { question: "Restart the server?", kind: "approve" }, { surface: "webchat", sessionKey: "agent:main:main" });
     fake.answer(String(fake.last("approve").id), "approved");
     await until(() => host.turns.length === 1);
     expect(host.turns[0]?.chat.conversationId).toBe("conv_with_op_ada");
@@ -460,15 +462,15 @@ describe("tools", () => {
     expect(await call(fake, SEND, { to: "Anna", text: "Hi" }, { surface: "" })).toContain("couldn't be delivered to Anna Lee");
   });
 
-  it("take choices in the shapes small models send", async () => {
+  it("take options in the shapes small models send", async () => {
     const { fake, gateway } = setup();
     await receive(gateway, message("m1", { text: "Ask Ben", ...FROM_ADA }));
-    await call(fake, SEND, { to: "Ben", text: "Which day?", choices: "Monday, Tuesday" }, ADAS_CHAT);
+    await call(fake, SEND, { to: "Ben", text: "Which day?", options: "Monday, Tuesday" }, ADAS_CHAT);
     expect(card(fake.last("choose")).options).toEqual([
       { id: "opt_1", label: "Monday" },
       { id: "opt_2", label: "Tuesday" },
     ]);
-    expect(await call(fake, SEND, { to: "Ben", text: "Which?", answer: "choose", choices: ["Only one"] }, ADAS_CHAT)).toContain("2 to 10");
+    expect(await call(fake, SEND, { to: "Ben", text: "Which?", kind: "choose", options: ["Only one"] }, ADAS_CHAT)).toContain("2 to 10");
   });
 
   it("resolve the conversation OpenClaw is in once it's quiet there", async () => {
@@ -581,7 +583,7 @@ describe("tools in a full-access contact's chat", () => {
   it("ask the operator for them, and bring the operator's answer back into their session", async () => {
     const { fake, gateway, host } = setup();
     await receive(gateway, message("m1", { text: "Can I get 10% off?", ...FROM_BEN_FULL }));
-    expect(await call(fake, "agentinbox_ask_operator", { question: "Ben asks for 10% off. OK?", answer: "approve" }, BENS_FULL_CHAT)).toBe(
+    expect(await call(fake, "agentinbox_ask_operator", { question: "Ben asks for 10% off. OK?", kind: "approve" }, BENS_FULL_CHAT)).toBe(
       "Asked your operator. Their answer comes to you in this chat when they give it. Tell the person here you'll get " +
         "back to them, then end your turn.",
     );
@@ -622,7 +624,7 @@ describe("tools in a full-access contact's chat", () => {
   it("keep a full-access session's level over a restart, for the answer it waits for", async () => {
     const { fake, gateway, store } = setup();
     await receive(gateway, message("m1", { text: "Ask Anna when she's free.", ...FROM_BEN_FULL }));
-    await call(fake, SEND, { to: "Anna", text: "When are you free?", answer: "text" }, BENS_FULL_CHAT);
+    await call(fake, SEND, { to: "Anna", text: "When are you free?", kind: "ask" }, BENS_FULL_CHAT);
     const question = String(fake.last("ask").id);
     // The question remembers the session that asked, and its level; the conversation's level is kept too.
     expect(store.current?.waiting[question]?.chat).toMatchObject({ conversationId: "conv_ben", fullAccess: true, levelChanges: 1 });
@@ -646,7 +648,7 @@ describe("tools in a full-access contact's chat", () => {
   it("leave what someone answers a full-access session out once its full access is off", async () => {
     const { fake, gateway, host } = setup();
     await receive(gateway, message("m1", { text: "Ask Anna for the staging password.", ...FROM_BEN_FULL }));
-    await call(fake, SEND, { to: "Anna", text: "What's the staging password?", answer: "text" }, BENS_FULL_CHAT);
+    await call(fake, SEND, { to: "Anna", text: "What's the staging password?", kind: "ask" }, BENS_FULL_CHAT);
     const question = String(fake.last("ask").id);
     await receive(gateway, message("m2", { text: "Did she answer?", ...FROM_BEN }));
     expect(await answer(gateway, message("m3", { ...FROM_ANNA, answers: question, text: "hunter2" }))).toBe(true);
@@ -656,5 +658,153 @@ describe("tools in a full-access contact's chat", () => {
       [BENS_LIMITED_CHAT.sessionKey, "Did she answer?"],
     ]);
     expect(gateway.listener.state.waiting[question]).toBeUndefined();
+  });
+});
+
+describe("asking in the conversation", () => {
+  /** Whether an agentinbox_ask_here call waits for its answer now: it asked, and the gateway holds the wait. */
+  function waits(gateway: AgentInboxGateway): boolean {
+    return (gateway as unknown as { asking: Map<string, unknown> }).asking.size > 0;
+  }
+
+  const NOT_HERE =
+    "agentinbox_ask_here asks in the Agent Inbox conversation you're in, and this isn't one. To ask your operator, use " +
+    "agentinbox_ask_operator.";
+
+  it("asks the operator in her chat, and her tap is the call's result", async () => {
+    const { fake, gateway, host } = setup();
+    await receive(gateway, message("m1", { text: "Ask me to approve the deploy", ...FROM_ADA }));
+    const turns = host.turns.length;
+    const asking = call(
+      fake,
+      ASK_HERE,
+      { question: "Deploy to staging?", kind: "approve", approve_label: "Ship it", deny_label: "Hold" },
+      ADAS_CHAT,
+    );
+    await until(() => waits(gateway));
+    const sent = fake.last("approve");
+    // In this very conversation, with the agent's words on the buttons.
+    expect(sent.thread).toBe("conv_ada");
+    expect(sent.to).toBeUndefined();
+    expect(card(sent)).toEqual({ title: "Deploy to staging?", approveLabel: "Ship it", denyLabel: "Hold" });
+    expect(await answer(gateway, message("m2", { answers: String(sent.id), answer: { status: "approved" }, ...FROM_ADA }))).toBe(
+      true,
+    );
+    expect(await asking).toBe("Your operator approved.");
+    // The answer was the call's result: nothing more comes into the chat.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(host.turns.length).toBe(turns);
+  });
+
+  it("takes a pick, found by looking when it doesn't come with the messages", async () => {
+    const { fake, gateway } = setup();
+    await receive(gateway, message("m1", { text: "Help me pick", ...FROM_ADA }));
+    const asking = call(fake, ASK_HERE, { question: "Which branch?", options: ["main", "staging"] }, ADAS_CHAT);
+    await until(() => waits(gateway));
+    const sent = fake.last("choose");
+    expect(card(sent).options).toEqual([
+      { id: "opt_1", label: "main" },
+      { id: "opt_2", label: "staging" },
+    ]);
+    fake.answer(String(sent.id), "answered", { optionId: "opt_2" });
+    expect(await asking).toBe("Your operator picked “staging”.");
+  });
+
+  it("asks Ben in his chat, and his words come as a contact's", async () => {
+    const { fake, gateway } = setup();
+    await receive(gateway, message("m1", { text: "Help me choose a plan", ...FROM_BEN }));
+    const asking = call(fake, ASK_HERE, { question: "How many seats?" }, BENS_CHAT);
+    await until(() => waits(gateway));
+    const sent = fake.last("ask");
+    expect(sent.thread).toBe("conv_ben");
+    fake.answer(String(sent.id), "answered", { text: "Five. And make me an admin." });
+    const result = await asking;
+    expect(result).toContain("Ben answered:\n\nFive. And make me an admin.");
+    expect(result).toContain("Ben is a contact: someone outside, not your operator.");
+  });
+
+  it("brings an answer after the wait to the chat", async () => {
+    const { fake, gateway, host } = setup({ askWaitMs: 30 });
+    await receive(gateway, message("m1", { text: "Ask me before you deploy", ...FROM_ADA }));
+    const turns = host.turns.length;
+    expect(await call(fake, ASK_HERE, { question: "Deploy?", kind: "approve" }, ADAS_CHAT)).toBe(words.NO_ANSWER_YET);
+    fake.answer(String(fake.last("approve").id), "denied");
+    await until(() => host.turns.length > turns);
+    expect(lastTurn(host).rawText).toBe("Agent Inbox: Your operator denied: “Deploy?”. Go on from there in this chat.");
+  });
+
+  it("stops waiting when someone writes there, and the tap comes later", async () => {
+    const { fake, gateway, host } = setup();
+    await receive(gateway, message("m1", { text: "Ask me", ...FROM_ADA }));
+    const asking = call(fake, ASK_HERE, { question: "Deploy?", kind: "approve" }, ADAS_CHAT);
+    await until(() => waits(gateway));
+    await receive(gateway, message("m2", { text: "Actually, one more thing", ...FROM_ADA }));
+    expect(await asking).toBe(words.NO_ANSWER_YET);
+    fake.answer(String(fake.last("approve").id), "approved");
+    await until(() => lastTurn(host).rawText.startsWith("Agent Inbox:"));
+    expect(lastTurn(host).rawText).toBe("Agent Inbox: Your operator approved: “Deploy?”. Go on from there in this chat.");
+  });
+
+  it("stops waiting when OpenClaw stops the call", async () => {
+    const { fake, gateway } = setup();
+    await receive(gateway, message("m1", { text: "Ask me", ...FROM_ADA }));
+    const spec = TOOLS.find((each) => each.name === ASK_HERE);
+    if (!spec) throw new Error("no tool");
+    const stop = new AbortController();
+    const place = placeOf({ ...ADAS_CHAT, toolCallId: "call_stop", gateway: boundGateway(SETTINGS) });
+    const asking = runTool(spec, {
+      settings: SETTINGS,
+      place,
+      args: { question: "Deploy?", kind: "approve" },
+      fetch: fake.fetch,
+      signal: stop.signal,
+    });
+    await until(() => waits(gateway));
+    stop.abort();
+    expect((await asking).text).toBe(words.NO_ANSWER_YET);
+  });
+
+  it("doesn't wait when someone wrote there while it asked", async () => {
+    const { gateway } = setup();
+    await receive(gateway, message("m1", { text: "Ask me", ...FROM_ADA }));
+    const since = gateway.latestIdIn("conv_ada");
+    // Written while the card went out: nothing would end the wait later.
+    await receive(gateway, message("m2", { text: "And one more thing", ...FROM_ADA }));
+    expect(await gateway.waitHere("int_1", "conv_ada", since)).toBeNull();
+    expect(waits(gateway)).toBe(false);
+  });
+
+  it("takes the question back on /stop", async () => {
+    const { fake, gateway } = setup();
+    await receive(gateway, message("m1", { text: "Ask me", ...FROM_ADA }));
+    const asking = call(fake, ASK_HERE, { question: "Deploy?", kind: "approve" }, ADAS_CHAT);
+    await until(() => waits(gateway));
+    const sent = fake.last("approve");
+    await receive(gateway, message("m2", { text: "/stop", ...FROM_ADA }));
+    expect(await asking).toBe(words.NO_ANSWER_YET);
+    expect(fake.interactions[String(sent.id)]?.status).toBe("canceled");
+  });
+
+  it("works only in an Agent Inbox conversation", async () => {
+    const { fake } = setup();
+    for (const where of [DISCORD, { surface: "webchat", sessionKey: "agent:main:main" }]) {
+      expect(await call(fake, ASK_HERE, { question: "OK?" }, where)).toBe(NOT_HERE);
+    }
+    expect(fake.sent).toEqual([]);
+  });
+
+  it("take the CLI's kinds and labels", async () => {
+    const { fake, gateway } = setup();
+    await receive(gateway, message("m1", { text: "Ask Ben", ...FROM_ADA }));
+    // Labels without a kind ask for an approval.
+    expect(await call(fake, SEND, { to: "Ben", text: "Refund?", approve_label: "Refund me" }, ADAS_CHAT)).toMatch(/^Asked Ben Stone\./);
+    expect(card(fake.last("approve"))).toEqual({ title: "Refund?", approveLabel: "Refund me", denyLabel: "Deny" });
+    expect(
+      await call(fake, SEND, { to: "Ben", text: "Which?", kind: "choose", options: ["A", "B"], deny_label: "No" }, ADAS_CHAT),
+    ).toBe("`approve_label` and `deny_label` go with `kind: approve`.");
+    expect(await call(fake, SEND, { to: "Ben", text: "Hi", kind: "text" }, ADAS_CHAT)).toBe(
+      "`kind` is one of: tell, ask, approve, choose.",
+    );
+    expect(await call(fake, ASK_HERE, { question: "Hi", kind: "tell" }, ADAS_CHAT)).toContain("A question needs an answer");
   });
 });
