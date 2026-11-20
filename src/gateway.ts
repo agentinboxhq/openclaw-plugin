@@ -104,9 +104,20 @@ type PendingQuestion = {
   chat: Chat;
   sessionKey: string;
   options: Record<string, string>;
+  // When its card is past its time, in ms.
+  expiresAt: number;
 };
 
 type Pending = PendingApproval | PendingQuestion;
+
+/**
+ * Whether an answer to this card counts only with the message that brings it: a full-access contact's, which says
+ * whether they still have full access. Such a card is never looked up: reading it marks its answer read, and the
+ * messages then leave the answer out. The contact is listened to, so their answer comes with the messages.
+ */
+function waitsForMessage(pending: Pending): boolean {
+  return pending.kind === "approval" ? pending.approver !== null : Boolean(pending.chat.fullAccess);
+}
 
 /** An answer agentinbox_ask_here got while it waited: what it asked, and what came back. */
 export type HereOutcome = {
@@ -161,12 +172,6 @@ function stillHasFullAccess(approver: string, from: words.ListenMessage["from"])
 /** A contact's own direct chat, whose level can change: never the operator's own, nor a group. */
 function changesLevel(chat: Chat): boolean {
   return chat.isDirect && !chat.starter?.from.isOperator;
-}
-
-/** Whether an interaction is past its time, as Agent Inbox says. */
-function expired(interaction: Json): boolean {
-  const at = Date.parse(String(interaction.expiresAt ?? ""));
-  return !Number.isNaN(at) && at <= Date.now();
 }
 
 /**
@@ -502,7 +507,13 @@ export class AgentInboxGateway {
         thread: chat.conversationId,
         ttlSeconds: QUESTION_TTL_SECONDS,
       });
-      this.watch(String(asked.id), { kind: "question", chat, sessionKey, options });
+      this.watch(String(asked.id), {
+        kind: "question",
+        chat,
+        sessionKey,
+        options,
+        expiresAt: Date.now() + QUESTION_TTL_SECONDS * 1000,
+      });
       this.sentInto(chat.conversationId);
       return String(asked.id ?? "") || null;
     }
@@ -855,7 +866,12 @@ export class AgentInboxGateway {
     while (!this.stopped && (this.pending.size || Object.keys(this.listener.state.waiting).length)) {
       await new Promise((resolve) => setTimeout(resolve, this.answerPollMs));
       if (this.stopped) return;
-      for (const interactionId of [...this.pending.keys()]) {
+      for (const [interactionId, waiting] of [...this.pending]) {
+        if (waitsForMessage(waiting)) {
+          // OpenClaw's own timeout denies an approval that gets no answer; a question past its time is left out.
+          if (waiting.kind === "question" && waiting.expiresAt <= Date.now()) this.pending.delete(interactionId);
+          continue;
+        }
         let asked: Json;
         try {
           asked = await this.api.getInteraction(interactionId);
@@ -866,14 +882,6 @@ export class AgentInboxGateway {
         if (status === "pending") continue;
         const pending = this.pending.get(interactionId);
         if (!pending) continue;
-        // A contact's Allow waits for the message that brings it, which says whether they still have full access.
-        // OpenClaw's own timeout denies it when none comes.
-        if (status === "approved" && pending.kind === "approval" && pending.approver) continue;
-        // So does an answer for a full-access session, until its card is past its time; then it is left out.
-        if (pending.kind === "question" && pending.chat.fullAccess && ["answered", "approved", "denied"].includes(status)) {
-          if (expired(asked)) this.pending.delete(interactionId);
-          continue;
-        }
         this.pending.delete(interactionId);
         const response = (asked.response ?? {}) as Json;
         await this.resolve(

@@ -473,10 +473,13 @@ describe("gateway: a contact's level and their sessions", () => {
     await gateway.deliver(chat, FULL_1, { text: "", question: { text: "And now?", options: ["Yes", "No"], multiple: false } });
     const late = String(fake.last("choose").id);
     fake.answer(late, "answered", { optionId: "opt_1" });
-    const interaction = fake.interactions[late];
-    if (interaction) interaction.expiresAt = new Date(Date.now() - 1000).toISOString();
-    await until(() => !(gateway as unknown as { pending: Map<string, unknown> }).pending.has(late));
+    const pending = (gateway as unknown as { pending: Map<string, { expiresAt: number }> }).pending;
+    const waiting = pending.get(late);
+    if (waiting) waiting.expiresAt = Date.now() - 1000;
+    await until(() => !pending.has(late));
     expect(host.turns).toHaveLength(2);
+    // Neither card was looked up: reading one would mark its answer read.
+    expect(fake.calls.filter((call) => call.startsWith("GET /v1/inbox/messages/"))).toEqual([]);
     await gateway.stop();
   });
 
@@ -560,7 +563,7 @@ describe("gateway: approvals in a full-access contact's run", () => {
     expect(host.approvals).toEqual([[request.id, "exec", "deny"]]);
   });
 
-  it("take that contact's Allow only from the message that brings it, and a Deny however it comes", async () => {
+  it("take that contact's answers only from the messages, and never look their cards up", async () => {
     const fake = new FakeApi();
     const { gateway, host } = makeGateway(fake);
     await receive(gateway, message("m1", { ...BEN_FULL }));
@@ -568,11 +571,12 @@ describe("gateway: approvals in a full-access contact's run", () => {
     const denied = await askExec(gateway, "git push --force", FULL_1);
     fake.answer(String(allowed.id), "approved");
     fake.answer(String(denied.id), "denied");
-    // Looking the cards up finds both answers; only the Deny counts from there.
-    await until(() => host.approvals.length === 1);
+    // Looking a card up would mark its answer read, and the messages would then leave it out.
     await new Promise((resolve) => setTimeout(resolve, 60));
-    expect(host.approvals).toEqual([[denied.request.id, "exec", "deny"]]);
+    expect(host.approvals).toEqual([]);
+    expect(fake.calls.filter((call) => call.startsWith("GET /v1/inbox/messages/"))).toEqual([]);
 
+    expect(await answer(gateway, message("m8", { ...BEN_FULL, answers: String(denied.id), answer: { status: "denied" } }))).toBe(true);
     expect(await answer(gateway, message("m9", { ...BEN_FULL, answers: String(allowed.id), answer: { status: "approved" } }))).toBe(true);
     expect(host.approvals).toEqual([
       [denied.request.id, "exec", "deny"],
