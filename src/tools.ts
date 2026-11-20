@@ -11,6 +11,7 @@
 // operator gave full access is the exception, in their own direct chat: it has what the operator's own chat has. In
 // OpenClaw's other apps' chats, writing to anyone but the operator asks the operator first: a `before_tool_call` hook
 // asks for OpenClaw's own plugin approval, and the tool sends nothing the approval didn't allow.
+import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import { AgentInboxApi, ApiError, type FetchLike, type Json, isRecord } from "./api.js";
 import type { AgentInboxGateway } from "./gateway.js";
 import { CHANNEL_ID, HOST_NAME, type Settings, connectionOf, isConfigured, readSettings } from "./settings.js";
@@ -60,18 +61,23 @@ export class ToolError extends Error {
 
 // --- the gateways running in this process ---
 
-// Shared by every copy of this module that OpenClaw loads, so the tools find the account that listens.
-const REGISTRY = Symbol.for("@agentinbox/openclaw/gateways");
-
-function registry(): Map<string, AgentInboxGateway> {
-  const holder = globalThis as unknown as Record<symbol, Map<string, AgentInboxGateway> | undefined>;
-  let found = holder[REGISTRY];
-  if (!found) {
-    found = new Map();
-    holder[REGISTRY] = found;
-  }
-  return found;
+/**
+ * A map in OpenClaw's own store for the plugin (`createPluginRuntimeStore`), which the gateway and the tools of a
+ * plugin instance share, so the tools find the account that listens.
+ */
+function sharedMap<V>(key: string): () => Map<string, V> {
+  const store = createPluginRuntimeStore<Map<string, V>>({ key, errorMessage: `${key} is not set up` });
+  return () => {
+    let found = store.tryGetRuntime();
+    if (!found) {
+      found = new Map();
+      store.setRuntime(found);
+    }
+    return found;
+  };
 }
+
+const registry = sharedMap<AgentInboxGateway>("@agentinbox/openclaw/gateways");
 
 /** The account listens now: tools for its connection go through it. */
 export function bindGateway(gateway: AgentInboxGateway): void {
@@ -357,17 +363,7 @@ type Clearance = { at: number; decision: string | null };
 
 // The sends the hook asked about, by tool call and by what they send: a send that needed the operator runs only once
 // its approval allowed it.
-const CLEARED = Symbol.for("@agentinbox/openclaw/cleared");
-
-function clearances(): Map<string, Clearance> {
-  const holder = globalThis as unknown as Record<symbol, Map<string, Clearance> | undefined>;
-  let found = holder[CLEARED];
-  if (!found) {
-    found = new Map();
-    holder[CLEARED] = found;
-  }
-  return found;
-}
+const clearances = sharedMap<Clearance>("@agentinbox/openclaw/cleared");
 
 function clearanceKeys(place: Place, args: Json): string[] {
   const content = [
