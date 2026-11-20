@@ -59,6 +59,7 @@
     "tools": [
       "agentinbox_ask_operator",
       "agentinbox_ask_here",
+      "agentinbox_card",
       "agentinbox_send",
       "agentinbox_conversations",
       "agentinbox_read",
@@ -82,6 +83,14 @@
         "full"
       ],
       "sideEffecting": true
+    },
+    "agentinbox_card": {
+      "profiles": [
+        "coding",
+        "messaging",
+        "full"
+      ],
+      "replaySafe": true
     },
     "agentinbox_send": {
       "profiles": [

@@ -109,7 +109,12 @@ type PendingQuestion = {
 type Pending = PendingApproval | PendingQuestion;
 
 /** An answer agentinbox_ask_here got while it waited: what it asked, and what came back. */
-export type HereOutcome = { question: WaitingQuestion; status: string; picked: string | null; text: string | null };
+export type HereOutcome = {
+  question: WaitingQuestion | null;
+  status: string;
+  picked: string | null;
+  text: string | null;
+};
 
 /** Whom OpenClaw's send tool writes to, and what, for the card its approval asks the operator with. */
 export type Write = { name: string; text: string; recipientId: string; sessionKey: string };
@@ -319,7 +324,7 @@ export class AgentInboxGateway {
     // itself, and their cards come off with them.
     if (command && first === "/stop") {
       await this.withdrawQuestions(this.host.sessionKeyFor(chat));
-      for (const questionId of this.stopWaitingIn(conversation)) await this.withdraw(questionId);
+      for (const questionId of this.stopWaitingIn(conversation, true)) await this.withdraw(questionId);
     }
     const at = Date.parse(String(message.at ?? ""));
     this.dispatch({
@@ -745,10 +750,16 @@ export class AgentInboxGateway {
     });
   }
 
-  /** The calls waiting in a conversation stop waiting; the questions they asked, by id. */
-  private stopWaitingIn(conversationId: string): string[] {
+  /**
+   * The calls waiting in a conversation stop waiting; the questions they asked, by id. A question about to be
+   * withdrawn, as by /stop, is the call's result as such; any other's answer still comes to the chat later.
+   */
+  private stopWaitingIn(conversationId: string, withdrawn = false): string[] {
     const stopped = [...this.asking].filter(([, waiting]) => waiting.conversationId === conversationId);
-    for (const [, waiting] of stopped) waiting.settle(null);
+    for (const [questionId, waiting] of stopped) {
+      const question = this.listener.state.waiting[questionId] ?? null;
+      waiting.settle(withdrawn ? { question, status: "canceled", picked: null, text: null } : null);
+    }
     return stopped.map(([questionId]) => questionId);
   }
 

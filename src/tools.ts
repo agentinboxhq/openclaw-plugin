@@ -19,12 +19,13 @@ import * as words from "./words.js";
 
 export const ASK_OPERATOR = "agentinbox_ask_operator";
 export const ASK_HERE = "agentinbox_ask_here";
+export const CARD = "agentinbox_card";
 export const SEND = "agentinbox_send";
 export const CONVERSATIONS = "agentinbox_conversations";
 export const READ = "agentinbox_read";
 export const CONTACTS = "agentinbox_contacts";
 export const RESOLVE = "agentinbox_resolve";
-export const TOOL_NAMES = [ASK_OPERATOR, ASK_HERE, SEND, CONVERSATIONS, READ, CONTACTS, RESOLVE] as const;
+export const TOOL_NAMES = [ASK_OPERATOR, ASK_HERE, CARD, SEND, CONVERSATIONS, READ, CONTACTS, RESOLVE] as const;
 
 // What a card asks for, in the words of the CLI and the MCP server: `tell` nothing, `ask` words, `approve` Approve
 // or Deny, `choose` one of a few options.
@@ -548,7 +549,16 @@ export async function askHere({ settings, place, args, signal }: ToolCall): Prom
     chat: { ...chat, starter: starter ? keptStarter(starter) : chat.starter },
   });
   const outcome = await gateway.waitHere(id, chat.conversationId, since, signal);
-  return outcome ? words.hereAnswer(outcome.question, outcome.status, outcome) : words.NO_ANSWER_YET;
+  return outcome ? words.hereAnswer(outcome.question ?? {}, outcome.status, outcome) : words.NO_ANSWER_YET;
+}
+
+/**
+ * Shows the agent's card, as `agentinbox card` does in the CLI and `agent_card` over MCP. Not in a contact's chat: its
+ * greeting is for the operator, by their first name.
+ */
+export async function card({ settings, place, fetch: fetchImpl }: ToolCall): Promise<string> {
+  if (hasContactLimits(boundGateway(settings), place)) throw new ToolError(words.CONTACT_NO_CARD);
+  return run(settings, async (api) => words.cardText(await api.showCard()), fetchImpl);
 }
 
 /**
@@ -856,6 +866,12 @@ const ASK_HERE_DESCRIPTION =
   "answer by then, the question stays open, and the answer comes to you in this chat when they give it. Only in an " +
   `Agent Inbox conversation; to ask your operator from anywhere else, use ${ASK_OPERATOR}.`;
 
+const CARD_DESCRIPTION =
+  "Introduce yourself with your Agent Inbox card: your name, your email address, and the link where anyone can " +
+  "email or message you. Call it when someone asks you to introduce yourself, to show or share your card, or who " +
+  "you are on Agent Inbox. Say the greeting it returns in your answer, then show the card with its link. Off in a " +
+  "contact's Agent Inbox conversation, unless they have full access.";
+
 const SEND_DESCRIPTION =
   "Write to your operator or to one of their contacts, in a new conversation on their usual channel. Your answer " +
   `in this chat already goes to the person here, and ${ASK_HERE} asks them something, so use this only for someone ` +
@@ -912,6 +928,13 @@ export const TOOLS: ToolSpec[] = [
       ["question"],
     ),
     run: askHere,
+  },
+  {
+    name: CARD,
+    label: "Show the agent card",
+    description: CARD_DESCRIPTION,
+    parameters: schema({}),
+    run: card,
   },
   {
     name: SEND,

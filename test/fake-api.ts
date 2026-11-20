@@ -76,6 +76,8 @@ export class FakeApi {
   unreachable: string[] = [];
   // The conversations resolved, in order, with the agent each was asked for.
   resolved: Array<{ id: string; agent: string | null }> = [];
+  // The bodies the card was shown with, each a showing.
+  cardsShown: Json[] = [];
   private next = 0;
   private waiters: Array<() => void> = [];
 
@@ -173,6 +175,21 @@ export class FakeApi {
       this.interactions[String(interaction.id)] = interaction;
       this.sent.push({ ...body, id: interaction.id });
       return json(201, { data: interaction });
+    }
+    if (route === "POST /v1/agent/card") {
+      this.cardsShown.push(body);
+      return json(200, {
+        data: {
+          greeting: "Hi Ada, I’m JunoX. I have my own inbox now. Here’s my card, so people can email or message me directly.",
+          name: "JunoX",
+          handle: "junox",
+          address: "junox@agentinbox.md",
+          url: "https://agentinbox.md/p/junox",
+          operatorFirstName: "Ada",
+          look: { shape: "blob", color: "amber", art: { kind: "rays", seed: 7 } },
+          firstShown: this.cardsShown.length === 1,
+        },
+      });
     }
     if (route === "GET /v1/contacts") {
       const start = Number.parseInt(params.after ?? "0", 10) || 0;

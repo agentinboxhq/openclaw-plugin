@@ -29,6 +29,7 @@ describe("in a contact's conversation", () => {
     expect(contactBlock("agentinbox_resolve", { conversation: "conv_anna" }, BENS, NONE)).toBe(words.CONTACT_RESOLVE_HERE_ONLY);
     // Asking goes only into this very conversation.
     expect(contactBlock("agentinbox_ask_here", { question: "How many seats?", kind: "ask" }, BENS, NONE)).toBeNull();
+    expect(contactBlock("agentinbox_card", {}, BENS, NONE)).toBe(words.CONTACT_NO_CARD);
 
     expect(contactBlock("agentinbox_send", { to: "Anna", text: "Hi" }, BENS, ["agentinbox"])).toBeNull();
     expect(contactBlock("agentinbox_contacts", {}, BENS, ["agentinbox"])).toBeNull();

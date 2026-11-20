@@ -272,6 +272,15 @@ export class AgentInboxApi {
     return isRecord(sent) ? sent : {};
   }
 
+  /**
+   * Shows the agent's card to its operator: what the agent says, and what its card holds. The first showing is kept
+   * on the agent, which is how agentinbox.md's onboarding sees it say hi.
+   */
+  async showCard(): Promise<Json> {
+    const shown = await this.request("POST", "/v1/agent/card", { json: this.agentParams() });
+    return isRecord(shown) ? shown : {};
+  }
+
   async getInteraction(interactionId: string): Promise<Json> {
     const found = await this.request("GET", `/v1/inbox/messages/${encodeURIComponent(interactionId)}`);
     return isRecord(found) ? found : {};

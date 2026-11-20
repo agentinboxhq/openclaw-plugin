@@ -78,6 +78,10 @@ export const CONTACT_NO_OTHERS =
   "Your operator's other conversations and contacts are theirs, and they're off in a contact's conversation. You " +
   "can read this conversation with agentinbox_read.";
 
+export const CONTACT_NO_CARD =
+  "Your Agent Inbox card greets your operator, so it's off in a contact's conversation. Introduce yourself in your " +
+  "answer instead.";
+
 export const CONTACT_RESOLVE_HERE_ONLY =
   "In a contact's conversation you can only resolve this conversation: the others are your operator's.";
 
@@ -400,6 +404,18 @@ export function answerNote(
   const answered = clean(options.text).trim();
   if (answered) return `Agent Inbox: ${who} answered your question “${asked}”:\n\n${answered}\n\n${goOn}${outside}`;
   return null;
+}
+
+/** The agent's card as OpenClaw says it: the greeting, then the name, the address and the link. */
+export function cardText(card: Json): string {
+  const name = clean(card.name).trim();
+  return [
+    clean(card.greeting).trim(),
+    "",
+    name,
+    ...(card.address ? [`Email: ${clean(card.address).trim()}`] : []),
+    ...(card.url ? [`Card: ${clean(card.url).trim()} (anyone can email or message ${name} from there)`] : []),
+  ].join("\n");
 }
 
 /** What agentinbox_ask_here says when nobody answered while it waited. */

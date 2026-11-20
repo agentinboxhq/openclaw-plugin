@@ -9,7 +9,7 @@
 // It is a fence, not a wall: a command can still reach a key in ways no check here reads, such as a script OpenClaw
 // wrote first. A contact who may run commands may run any.
 import { type Json, isRecord } from "./api.js";
-import { ASK_HERE, ASK_OPERATOR, CONTACTS, CONVERSATIONS, type Place, READ, RESOLVE, SEND } from "./tools.js";
+import { ASK_HERE, ASK_OPERATOR, CARD, CONTACTS, CONVERSATIONS, type Place, READ, RESOLVE, SEND } from "./tools.js";
 import * as words from "./words.js";
 
 /** The name that gives contacts this plugin's own tools, in `contactsCanUse`. */
@@ -107,7 +107,16 @@ const PATH_KEYS = [
 const TOOL_KEYS = ["name", "tool", "toolName", "tool_name"];
 
 // The plugin's own tools.
-const OWN_TOOLS: ReadonlySet<string> = new Set([SEND, ASK_OPERATOR, ASK_HERE, CONVERSATIONS, CONTACTS, READ, RESOLVE]);
+const OWN_TOOLS: ReadonlySet<string> = new Set([
+  SEND,
+  ASK_OPERATOR,
+  ASK_HERE,
+  CARD,
+  CONVERSATIONS,
+  CONTACTS,
+  READ,
+  RESOLVE,
+]);
 
 /** Every string in a tool's arguments, however deep, up to a limit. */
 function stringsIn(value: unknown, found: string[] = [], depth = 0): string[] {
@@ -165,6 +174,7 @@ function ownToolBlock(tool: string, args: Json, place: Place): string | null | u
   if (tool === ASK_HERE) return null;
   if (tool === SEND) return words.CONTACT_NO_WRITING;
   if (tool === ASK_OPERATOR) return words.CONTACT_NO_ASKING;
+  if (tool === CARD) return words.CONTACT_NO_CARD;
   if (tool === CONVERSATIONS || tool === CONTACTS) return words.CONTACT_NO_OTHERS;
   if (tool === READ) return named && named === here ? null : words.contactReadHereOnly(here);
   return !named || named === here ? null : words.CONTACT_RESOLVE_HERE_ONLY;

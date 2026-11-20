@@ -142,10 +142,11 @@ function lastTurn(host: FakeHost) {
 }
 
 describe("tools", () => {
-  it("are seven, with the send tool's required arguments", () => {
+  it("are eight, with the send tool's required arguments", () => {
     expect(TOOLS.map((each) => each.name).sort()).toEqual([
       "agentinbox_ask_here",
       "agentinbox_ask_operator",
+      "agentinbox_card",
       "agentinbox_contacts",
       "agentinbox_conversations",
       "agentinbox_read",
@@ -166,6 +167,7 @@ describe("tools", () => {
       words.CONTACT_NO_ASKING,
     );
     expect(await call(fake, "agentinbox_conversations", {}, BENS_CHAT)).toBe(words.CONTACT_NO_OTHERS);
+    expect(await call(fake, "agentinbox_card", {}, BENS_CHAT)).toBe(words.CONTACT_NO_CARD);
     expect(await call(fake, "agentinbox_contacts", {}, BENS_CHAT)).toBe(words.CONTACT_NO_OTHERS);
     expect(await call(fake, "agentinbox_read", { conversation: "conv_anna" }, BENS_CHAT)).toBe(words.contactReadHereOnly("conv_ben"));
     expect(await call(fake, "agentinbox_resolve", { conversation: "conv_anna" }, BENS_CHAT)).toBe(words.CONTACT_RESOLVE_HERE_ONLY);
@@ -781,8 +783,21 @@ describe("asking in the conversation", () => {
     await until(() => waits(gateway));
     const sent = fake.last("approve");
     await receive(gateway, message("m2", { text: "/stop", ...FROM_ADA }));
-    expect(await asking).toBe(words.NO_ANSWER_YET);
+    expect(await asking).toBe("The question was withdrawn before anyone answered.");
     expect(fake.interactions[String(sent.id)]?.status).toBe("canceled");
+  });
+
+  it("shows the agent's card, from the Control UI and the operator's own chat", async () => {
+    const { fake, gateway } = setup();
+    await receive(gateway, message("m1", { text: "Introduce yourself", ...FROM_ADA }));
+    for (const where of [{ surface: "webchat", sessionKey: "agent:main:main" }, ADAS_CHAT]) {
+      expect(await call(fake, "agentinbox_card", {}, where)).toBe(
+        "Hi Ada, I’m JunoX. I have my own inbox now. Here’s my card, so people can email or message me directly.\n\n" +
+          "JunoX\nEmail: junox@agentinbox.md\nCard: https://agentinbox.md/p/junox (anyone can email or message JunoX from there)",
+      );
+    }
+    // Each showing goes to the API, which keeps the first, for the onboarding.
+    expect(fake.cardsShown).toHaveLength(2);
   });
 
   it("works only in an Agent Inbox conversation", async () => {
