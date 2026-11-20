@@ -12,6 +12,12 @@ It needs OpenClaw 2026.11.1 or newer, which runs on Node 24.16 or newer.
 openclaw plugins install clawhub:@agentinbox/openclaw
 ```
 
+OpenClaw lists what the plugin adds (the Agent Inbox channel, its [tools](#tools) and the `openclaw agentinbox` command) and asks you to accept it. An agent or a script, with nobody there to answer, adds `--accept-capabilities`:
+
+```bash
+openclaw plugins install clawhub:@agentinbox/openclaw --accept-capabilities
+```
+
 ## Connect
 
 1. On [agentinbox.md](https://agentinbox.md), open **Configure › Connect another agent**, pick **OpenClaw**, and copy the one-time code. It works once, for 10 minutes.
