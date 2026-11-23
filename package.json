@@ -1,0 +1,77 @@
+{
+  "name": "@agentinbox/openclaw",
+  "version": "0.1.0",
+  "description": "Agent Inbox for OpenClaw: messages to your agent on Telegram, Slack or email reach OpenClaw's gateway within seconds, and OpenClaw answers in the same conversation.",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/agentinboxhq/openclaw-plugin.git"
+  },
+  "homepage": "https://agentinbox.md",
+  "keywords": [
+    "agent-inbox",
+    "openclaw",
+    "channel",
+    "telegram",
+    "slack",
+    "email",
+    "human-in-the-loop"
+  ],
+  "files": [
+    "dist",
+    "openclaw.plugin.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=24.16.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit",
+    "test": "vitest run",
+    "check": "npm run typecheck && npm test && npm run build"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.11.1"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "openclaw": "^2026.11.1",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  },
+  "openclaw": {
+    "extensions": [
+      "./dist/index.js"
+    ],
+    "setupEntry": "./dist/setup-entry.js",
+    "channel": {
+      "id": "agentinbox",
+      "label": "Agent Inbox",
+      "selectionLabel": "Agent Inbox (Telegram, Slack, email)",
+      "docsPath": "/channels/agentinbox",
+      "docsLabel": "agentinbox",
+      "blurb": "Messages to your agent on Telegram, Slack or email, from you and the contacts it listens to, start OpenClaw, and its answer goes back in the same conversation."
+    },
+    "compat": {
+      "pluginApi": ">=2026.11.1",
+      "minGatewayVersion": "2026.11.1"
+    },
+    "build": {
+      "openclawVersion": "2026.11.1",
+      "pluginSdkVersion": "2026.11.1"
+    },
+    "install": {
+      "npmSpec": "@agentinbox/openclaw",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.11.1"
+    }
+  }
+}
