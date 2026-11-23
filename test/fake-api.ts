@@ -198,6 +198,11 @@ export class FakeApi {
       const more = start + size < this.contacts.length ? String(start + size) : null;
       return json(200, { data: page, next: more });
     }
+    if (method === "GET" && /^\/v1\/contacts\/[^/]+$/.test(path)) {
+      const id = decodeURIComponent(path.split("/")[3] ?? "");
+      const contact = this.contacts.find((each) => each.id === id);
+      return contact ? json(200, { data: contact }) : json(404, { message: "Contact not found" });
+    }
     if (route === "GET /v1/inbox") {
       this.reads.push(params);
       return json(200, { data: this.conversations, next: this.conversationsNext });

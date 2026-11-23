@@ -13,7 +13,7 @@ export const ACCOUNT_ID = "default";
 export const HOST_ID = "openclaw";
 export const HOST_NAME = "OpenClaw";
 
-export const PLUGIN_VERSION = "0.1.0";
+export const PLUGIN_VERSION = "0.1.1";
 
 export const DEFAULT_API_URL = "https://www.agentinbox.md/api";
 

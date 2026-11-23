@@ -119,6 +119,21 @@ function waitsForMessage(pending: Pending): boolean {
   return pending.kind === "approval" ? pending.approver !== null : Boolean(pending.chat.fullAccess);
 }
 
+/**
+ * The same for a question OpenClaw asked with its tools: its answer counts only with the message that brings it when
+ * it asked a contact in their own session at full access.
+ */
+function answerWaitsForMessage(question: WaitingQuestion): boolean {
+  const chat = question.chat;
+  return Boolean(chat?.fullAccess && chat.userId) && !question.toOperator && question.to === chat?.userId;
+}
+
+/** Whether a message comes from the contact whose own chat this is. */
+function fromContactOf(chat: Chat, message: words.ListenMessage): boolean {
+  const from = message.from;
+  return Boolean(chat.userId) && String(from?.id ?? "") === chat.userId && !from?.isOperator;
+}
+
 /** An answer agentinbox_ask_here got while it waited: what it asked, and what came back. */
 export type HereOutcome = {
   question: WaitingQuestion | null;
@@ -361,23 +376,27 @@ export class AgentInboxGateway {
     return this.listener.state.levels?.[conversationId] ?? FIRST_LEVEL;
   }
 
-  /**
-   * A contact's message in their own direct chat sets the conversation's level, as its full access says. When that
-   * changes, this message starts a fresh session at the new level, kept for after a restart too, and the approval
-   * cards still waiting on the conversation's earlier sessions come off, each a Deny for OpenClaw.
-   */
+  /** A contact's message in their own direct chat sets the conversation's level, as its full access says. */
   private async takeLevel(chat: Chat, message: words.ListenMessage): Promise<void> {
     if (!changesLevel(chat)) return;
-    const fullAccess = words.hasFullAccess(message.from);
-    const level = this.levelOf(chat.conversationId);
+    await this.changeLevel(chat.conversationId, words.hasFullAccess(message.from));
+  }
+
+  /**
+   * A contact's conversation at the level their message, or Agent Inbox, says it has now. When that changes, it goes on
+   * in a fresh session at the new level, kept for after a restart too, and the approval cards still waiting on the
+   * conversation's earlier sessions come off, each a Deny for OpenClaw.
+   */
+  private async changeLevel(conversationId: string, fullAccess: boolean): Promise<void> {
+    const level = this.levelOf(conversationId);
     if (level.fullAccess === fullAccess) return;
-    setLevel(this.listener.state, chat.conversationId, { fullAccess, changes: level.changes + 1 });
+    setLevel(this.listener.state, conversationId, { fullAccess, changes: level.changes + 1 });
     this.listener.save();
     this.log.info(
-      `[Agent Inbox] ${chat.conversationId} is ${fullAccess ? "at full access" : "back to a contact's limits"} now: ` +
+      `[Agent Inbox] ${conversationId} is ${fullAccess ? "at full access" : "back to a contact's limits"} now: ` +
         "it goes on in a fresh session.",
     );
-    await this.withdrawApprovals(chat.conversationId);
+    await this.withdrawApprovals(conversationId);
   }
 
   /** A chat at its conversation's level now, which names its session. The operator's own chat and groups have none. */
@@ -393,6 +412,27 @@ export class AgentInboxGateway {
    */
   private fullAccessEnded(chat: Chat, from: words.ListenMessage["from"]): boolean {
     return Boolean(chat.fullAccess) && !(words.hasFullAccess(from) && this.levelOf(chat.conversationId).fullAccess);
+  }
+
+  /**
+   * Whether a full-access session may go on for an answer to its question: its conversation is still at full access,
+   * as its contact's own answer says; for anyone else's answer, and one looked up, as Agent Inbox says now. A session
+   * whose contact's level can't be told doesn't go on.
+   */
+  private async stillAtFullAccess(chat: Chat, message: words.ListenMessage | null): Promise<boolean> {
+    const contact = this.fullAccessFor(chat);
+    if (!contact) return false;
+    if (message && fromContactOf(chat, message)) return words.hasFullAccess(message.from);
+    let found: Json;
+    try {
+      found = await this.api.getContact(contact);
+    } catch (error) {
+      this.log.warn(`[Agent Inbox] Couldn't check that ${contact} still has full access (${String(error)}): taken as off.`);
+      return false;
+    }
+    if (found.fullAccess === true) return true;
+    await this.changeLevel(chat.conversationId, false);
+    return false;
   }
 
   /**
@@ -418,8 +458,16 @@ export class AgentInboxGateway {
       await this.resolve(pending, status, optionId, text, message.from ?? null);
       return true;
     }
-    if (answers in this.listener.state.waiting) {
-      await this.answered(answers, status, optionId, text);
+    const question = this.listener.state.waiting[answers];
+    if (question) {
+      // The same for a question OpenClaw asked a full-access contact with its tools: once their answer, or their
+      // conversation since, shows their full access off, their answer is their next message, in a fresh session.
+      if (question.chat && fromContactOf(question.chat, message) && this.fullAccessEnded(question.chat, message.from)) {
+        this.forget(answers);
+        await this.onMessage(message);
+        return true;
+      }
+      await this.answered(answers, status, optionId, text, message);
       return true;
     }
     return false;
@@ -774,7 +822,17 @@ export class AgentInboxGateway {
     return stopped.map(([questionId]) => questionId);
   }
 
-  private async answered(questionId: string, status: string, optionId: string | null, text: string | null): Promise<void> {
+  /**
+   * The answer to a question OpenClaw asked with its tools, as `message` brings it, or as it was looked up when there
+   * is none: the result of the call still waiting for it, or else a message in the chat that asked.
+   */
+  private async answered(
+    questionId: string,
+    status: string,
+    optionId: string | null,
+    text: string | null,
+    message: words.ListenMessage | null = null,
+  ): Promise<void> {
     const question = this.listener.state.waiting[questionId];
     if (!question) return;
     delete this.listener.state.waiting[questionId];
@@ -782,12 +840,14 @@ export class AgentInboxGateway {
     remember(this.listener.state, "own", questionId);
     this.listener.save();
     const picked = optionId ? question.options?.[optionId] ?? null : null;
-    // The chat that asked, in its own session; asked from elsewhere, the asked person's conversation at its level now.
+    // The chat that asked, in its own session; asked from elsewhere, the asked person's conversation at its level now,
+    // which their own answer sets first.
     const elsewhere = question.chat ? null : conversationChat(question);
+    if (elsewhere && message && fromContactOf(elsewhere, message)) await this.takeLevel(elsewhere, message);
     const chat = question.chat ?? (elsewhere ? this.atLevel(elsewhere) : null);
     // A full-access session doesn't go on once the contact's full access is off, and nothing from it goes into
     // another session: what someone answered it is left out.
-    const accessEnded = Boolean(chat?.fullAccess && !this.levelOf(chat.conversationId).fullAccess);
+    const accessEnded = chat?.fullAccess ? !(await this.stillAtFullAccess(chat, message)) : false;
     const waiting = this.asking.get(questionId);
     // The call that asked still waits for it: the answer is its result.
     waiting?.settle(accessEnded ? null : { question, status, picked, text });
@@ -900,7 +960,12 @@ export class AgentInboxGateway {
   }
 
   private async pollWaiting(): Promise<void> {
-    for (const questionId of Object.keys(this.listener.state.waiting)) {
+    for (const [questionId, question] of Object.entries(this.listener.state.waiting)) {
+      if (answerWaitsForMessage(question)) {
+        // Never looked up, as a full-access contact's card isn't: past its time, nothing answers it any more.
+        if (question.expiresAt && Date.parse(question.expiresAt) <= Date.now()) this.forget(questionId);
+        continue;
+      }
       let asked: Json;
       try {
         asked = await this.api.getInteraction(questionId);
@@ -923,6 +988,14 @@ export class AgentInboxGateway {
         );
       }
     }
+  }
+
+  /** A question OpenClaw asked with its tools that nothing waits for any more: its answer, now or later, starts nothing. */
+  private forget(questionId: string): void {
+    delete this.listener.state.waiting[questionId];
+    remember(this.listener.state, "own", questionId);
+    this.listener.save();
+    this.asking.get(questionId)?.settle(null);
   }
 
   private async withdrawQuestions(sessionKey: string): Promise<void> {
