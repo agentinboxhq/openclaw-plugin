@@ -383,6 +383,16 @@ export class AgentInboxGateway {
   }
 
   /**
+   * A contact's answer in their own direct chat takes their full access away once it shows it off, as their next
+   * message would. It never brings it: only their message does.
+   */
+  private async fullAccessOffBy(message: words.ListenMessage): Promise<void> {
+    if (words.hasFullAccess(message.from) || message.from?.isOperator || message.isDirectMessage === false) return;
+    const conversationId = String(message.conversationId ?? "");
+    if (this.levelOf(conversationId).fullAccess) await this.changeLevel(conversationId, false);
+  }
+
+  /**
    * A contact's conversation at the level their message, or Agent Inbox, says it has now. When that changes, it goes on
    * in a fresh session at the new level, kept for after a restart too, and the approval cards still waiting on the
    * conversation's earlier sessions come off, each a Deny for OpenClaw.
@@ -446,8 +456,11 @@ export class AgentInboxGateway {
     const optionId = answer.optionId ? String(answer.optionId) : null;
     const text = words.clean(answer.text ?? message.text) || null;
     const pending = this.pending.get(answers);
+    if (pending) this.pending.delete(answers);
+    // An answer shows its contact's full access as their message does: once it shows it off, every session of theirs
+    // has a contact's limits, the one that asked too.
+    await this.fullAccessOffBy(message);
     if (pending) {
-      this.pending.delete(answers);
       // An answer goes on in the session that asked, at its level. A full-access session doesn't, once the contact's
       // full access is off: their answer is then their next message, which goes on at the level it shows, in a fresh
       // session.
@@ -840,10 +853,8 @@ export class AgentInboxGateway {
     remember(this.listener.state, "own", questionId);
     this.listener.save();
     const picked = optionId ? question.options?.[optionId] ?? null : null;
-    // The chat that asked, in its own session; asked from elsewhere, the asked person's conversation at its level now,
-    // which their own answer sets first.
+    // The chat that asked, in its own session; asked from elsewhere, the asked person's conversation at its level now.
     const elsewhere = question.chat ? null : conversationChat(question);
-    if (elsewhere && message && fromContactOf(elsewhere, message)) await this.takeLevel(elsewhere, message);
     const chat = question.chat ?? (elsewhere ? this.atLevel(elsewhere) : null);
     // A full-access session doesn't go on once the contact's full access is off, and nothing from it goes into
     // another session: what someone answered it is left out.
