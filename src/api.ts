@@ -334,4 +334,12 @@ export class AgentInboxApi {
   listContacts(options: { limit?: number; after?: string | null } = {}): Promise<Page> {
     return this.page("/v1/contacts", { limit: options.limit ?? 50, after: options.after ?? undefined });
   }
+
+  /** One contact as Agent Inbox has them now: whether the agent listens to them, and whether they have full access. */
+  async getContact(contactId: string): Promise<Json> {
+    const found = await this.request("GET", `/v1/contacts/${encodeURIComponent(contactId)}`, {
+      params: this.agentParams(),
+    });
+    return isRecord(found) ? found : {};
+  }
 }

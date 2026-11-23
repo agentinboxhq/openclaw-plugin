@@ -1,6 +1,6 @@
 {
   "name": "@agentinbox/openclaw",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Agent Inbox for OpenClaw: messages to your agent on Telegram, Slack or email reach OpenClaw's gateway within seconds, and OpenClaw answers in the same conversation.",
   "license": "MIT",
   "type": "module",

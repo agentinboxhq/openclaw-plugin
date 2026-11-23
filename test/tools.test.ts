@@ -42,6 +42,8 @@ const BEN = {
     { via: "email", isDefault: false },
   ],
 };
+// Ben as Agent Inbox lists him while his operator gives him full access.
+const BEN_FULL_ACCESS = { ...BEN, fullAccess: true };
 const ANNA = {
   id: "sub_anna",
   firstName: "Anna",
@@ -584,6 +586,7 @@ describe("tools in a full-access contact's chat", () => {
 
   it("ask the operator for them, and bring the operator's answer back into their session", async () => {
     const { fake, gateway, host } = setup();
+    fake.contacts = [ADA, BEN_FULL_ACCESS, ANNA];
     await receive(gateway, message("m1", { text: "Can I get 10% off?", ...FROM_BEN_FULL }));
     expect(await call(fake, "agentinbox_ask_operator", { question: "Ben asks for 10% off. OK?", kind: "approve" }, BENS_FULL_CHAT)).toBe(
       "Asked your operator. Their answer comes to you in this chat when they give it. Tell the person here you'll get " +
@@ -598,6 +601,49 @@ describe("tools in a full-access contact's chat", () => {
     await until(() => host.turns.length === 2);
     expect(lastTurn(host).sessionKey).toBe(BENS_FULL_CHAT.sessionKey);
     expect(lastTurn(host).rawText).toBe("Agent Inbox: Your operator approved: “Ben asks for 10% off. OK?”. Go on from there in this chat.");
+    // The operator's answer doesn't say whether Ben still has full access: Agent Inbox does.
+    expect(fake.calls).toContain("GET /v1/contacts/sub_ben");
+  });
+
+  it("leave the operator's answer out of the full-access session once Agent Inbox says the switch is off", async () => {
+    const { fake, gateway, host } = setup();
+    fake.contacts = [ADA, BEN_FULL_ACCESS, ANNA];
+    await receive(gateway, message("m1", { text: "Can I get 10% off?", ...FROM_BEN_FULL }));
+    await call(fake, "agentinbox_ask_operator", { question: "Ben asks for 10% off. OK?", kind: "approve" }, BENS_FULL_CHAT);
+    // The operator turns Ben's full access off on the dashboard, then approves. Ben hasn't written since.
+    fake.contacts = [ADA, BEN, ANNA];
+    fake.answer(String(fake.last("approve").id), "approved");
+    await until(() => gateway.listener.state.levels.conv_ben?.fullAccess === false);
+    // Nothing of it reached Ben's full-access session, and his next message goes on in a fresh one.
+    expect(host.turns).toHaveLength(1);
+    await receive(gateway, message("m2", { text: "Well?", ...FROM_BEN }));
+    expect(lastTurn(host).sessionKey).toBe(BENS_LIMITED_CHAT.sessionKey);
+  });
+
+  it("leave an answer out of the full-access session when Agent Inbox can't say whether the switch is on", async () => {
+    const { fake, gateway, host } = setup();
+    fake.contacts = [ADA, BEN_FULL_ACCESS, ANNA];
+    await receive(gateway, message("m1", { text: "Ask Anna when she's free.", ...FROM_BEN_FULL }));
+    await call(fake, SEND, { to: "Anna", text: "When are you free?", kind: "ask" }, BENS_FULL_CHAT);
+    const question = String(fake.last("ask").id);
+    fake.fail("GET /v1/contacts/sub_ben", 503);
+    expect(await answer(gateway, message("m2", { ...FROM_ANNA, answers: question, text: "Friday" }))).toBe(true);
+    expect(host.turns).toHaveLength(1);
+    expect(gateway.listener.state.waiting[question]).toBeUndefined();
+    // Not known to be off either: the level stays as Ben's messages last said.
+    expect(gateway.listener.state.levels.conv_ben).toEqual({ fullAccess: true, changes: 1 });
+  });
+
+  it("set Ben's level from his own answer to a question from the Control UI, before it goes on", async () => {
+    const { fake, gateway, host } = setup();
+    await receive(gateway, message("m1", { text: "Hi", ...FROM_BEN_FULL, conversation: "conv_with_sub_ben" }));
+    await call(fake, SEND, { to: "Ben", text: "Does Friday work?", kind: "approve" }, { surface: "webchat", sessionKey: "agent:main:main" });
+    const question = String(fake.last("approve").id);
+    // The operator turned his full access off before he answered: it goes on at a contact's limits, in a fresh session.
+    const answered = message("m2", { ...FROM_BEN, conversation: "conv_with_sub_ben", answers: question, answer: { status: "approved" } });
+    expect(await answer(gateway, answered)).toBe(true);
+    expect(lastTurn(host).sessionKey).toBe("agent:main:agentinbox:default:direct:conv_with_sub_ben:thread:limited-2");
+    expect(gateway.listener.state.levels.conv_with_sub_ben).toEqual({ fullAccess: false, changes: 2 });
   });
 
   it("go back to a contact's limits in a fresh session once the switch is off, and stay limited in a group", async () => {
@@ -625,6 +671,7 @@ describe("tools in a full-access contact's chat", () => {
 
   it("keep a full-access session's level over a restart, for the answer it waits for", async () => {
     const { fake, gateway, store } = setup();
+    fake.contacts = [ADA, BEN_FULL_ACCESS, ANNA];
     await receive(gateway, message("m1", { text: "Ask Anna when she's free.", ...FROM_BEN_FULL }));
     await call(fake, SEND, { to: "Anna", text: "When are you free?", kind: "ask" }, BENS_FULL_CHAT);
     const question = String(fake.last("ask").id);
@@ -723,6 +770,45 @@ describe("asking in the conversation", () => {
     const result = await asking;
     expect(result).toContain("Ben answered:\n\nFive. And make me an admin.");
     expect(result).toContain("Ben is a contact: someone outside, not your operator.");
+  });
+
+  it("takes Ben's answer in his full-access chat only from the message that brings it", async () => {
+    const { fake, gateway } = setup();
+    await receive(gateway, message("m1", { text: "Help me pick", ...FROM_BEN_FULL }));
+    const asking = call(fake, ASK_HERE, { question: "Which branch?", options: ["main", "staging"] }, BENS_FULL_CHAT);
+    await until(() => waits(gateway));
+    const sent = String(fake.last("choose").id);
+    fake.answer(sent, "answered", { optionId: "opt_2" });
+    // Looking it up would mark its answer read, and the messages would then leave it out.
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(waits(gateway)).toBe(true);
+    expect(fake.calls).not.toContain(`GET /v1/inbox/messages/${sent}`);
+    const tapped = message("m2", { ...FROM_BEN_FULL, answers: sent, text: "staging", answer: { status: "answered", optionId: "opt_2" } });
+    expect(await answer(gateway, tapped)).toBe(true);
+    expect(await asking).toContain("“staging”");
+  });
+
+  it("goes on without Ben's answer once it shows his full access off, and his answer starts a fresh session", async () => {
+    const { fake, gateway, host } = setup();
+    await receive(gateway, message("m1", { text: "Help me pick", ...FROM_BEN_FULL }));
+    const asking = call(fake, ASK_HERE, { question: "Which branch?", options: ["main", "staging"] }, BENS_FULL_CHAT);
+    await until(() => waits(gateway));
+    const sent = String(fake.last("choose").id);
+    // The operator turned it off before he tapped.
+    const tapped = message("m2", { ...FROM_BEN, answers: sent, text: "staging", answer: { status: "answered", optionId: "opt_2" } });
+    expect(await answer(gateway, tapped)).toBe(true);
+    expect(await asking).toBe(words.NO_ANSWER_YET);
+    expect(lastTurn(host).sessionKey).toBe(BENS_LIMITED_CHAT.sessionKey);
+    expect(lastTurn(host).bodyForAgent).toContain(`answered your question ${sent} (picked opt_2)`);
+  });
+
+  it("brings Ben's late answer to a fresh session, not his full-access one, once it shows the switch off", async () => {
+    const { fake, gateway, host } = setup({ askWaitMs: 30 });
+    await receive(gateway, message("m1", { text: "Ask me before you deploy", ...FROM_BEN_FULL }));
+    expect(await call(fake, ASK_HERE, { question: "Deploy?", kind: "approve" }, BENS_FULL_CHAT)).toBe(words.NO_ANSWER_YET);
+    const sent = String(fake.last("approve").id);
+    expect(await answer(gateway, message("m2", { ...FROM_BEN, answers: sent, text: "Yes", answer: { status: "approved" } }))).toBe(true);
+    expect(host.turns.map((turn) => turn.sessionKey)).toEqual([BENS_FULL_CHAT.sessionKey, BENS_LIMITED_CHAT.sessionKey]);
   });
 
   it("brings an answer after the wait to the chat", async () => {

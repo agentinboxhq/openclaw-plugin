@@ -561,6 +561,9 @@ describe("gateway: approvals in a full-access contact's run", () => {
     // The operator turned it off before Ben tapped Allow: the message with his tap says so.
     await answer(gateway, message("m9", { ...BEN, answers: String(id), answer: { status: "approved" } }));
     expect(host.approvals).toEqual([[request.id, "exec", "deny"]]);
+    // His tap takes full access away at once, as his next message would: the run going on has a contact's limits.
+    expect(gateway.listener.state.levels.conv_1).toEqual({ fullAccess: false, changes: 2 });
+    expect(gateway.approverFor(FULL_1)).toBeNull();
   });
 
   it("take that contact's answers only from the messages, and never look their cards up", async () => {

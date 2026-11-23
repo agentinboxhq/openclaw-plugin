@@ -2,7 +2,7 @@
   "id": "agentinbox",
   "name": "Agent Inbox",
   "description": "Messages to your agent on Telegram, Slack or email reach OpenClaw within seconds, and OpenClaw answers in the same conversation. Its tools ask the people in a conversation, ask the operator and bring the answer back to the chat, write to the operator's contacts, read the conversations, and resolve them.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "activation": {
     "onStartup": true
   },

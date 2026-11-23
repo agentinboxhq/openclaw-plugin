@@ -94,7 +94,7 @@ A message from a contact with full access, in their own direct chat, runs OpenCl
 
 Approvals go to that contact, not to the operator: the Allow and Deny card comes in their own conversation, and their Allow counts only while their full access is still on. `agentinbox_ask_operator` still asks the operator. Their commands are still only `/stop`, and OpenClaw's own notices still show only in the operator's conversation.
 
-In a group they are a contact like any other. The switch counts message by message: once the operator turns it off, the contact's next message has a contact's limits again. Turning it on or off starts a fresh session with the next message, so nothing from one level carries into the other.
+In a group they are a contact like any other. The switch counts message by message: once the operator turns it off, the contact's next message has a contact's limits again. Turning it on or off starts a fresh session with the next message, so nothing from one level carries into the other. An answer to a question their run asked goes on in that run only while their full access is still on: their own answer says so, and for anyone else's, the plugin asks Agent Inbox first. Once it's off, their answer is their next message, in a fresh session, and anyone else's is left out.
 
 > **Warning:** full access includes the agent's key and the operator's memory files, and the person can run any command on this computer. Only turn it on for someone you'd trust with your agent's key.
 
@@ -179,7 +179,7 @@ To try a local build in OpenClaw:
 ```bash
 npm run build
 npm pack
-openclaw plugins install npm-pack:./agentinbox-openclaw-0.1.0.tgz --force
+openclaw plugins install npm-pack:./agentinbox-openclaw-0.1.1.tgz --force
 ```
 
 ## License
